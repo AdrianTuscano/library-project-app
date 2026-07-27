@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:http/http.dart' as http;
 import 'book_cache.dart';
 
@@ -15,6 +14,13 @@ enum ResultSource {
   unavailable, // no network AND no cache hit — shows raw OCR text
 }
 
+/// Circulation status from the library's ILS (Georgetown PL = Biblionix Apollo).
+enum LibraryAvailability {
+  available,  // ILS says it belongs on the shelf — safe to sort
+  checkedOut, // ILS says it's checked out → it was reshelved by mistake; RETURN it
+  unknown,    // no status source, or lookup failed
+}
+
 class BookResult {
   final String title;
   final String author;
@@ -23,6 +29,7 @@ class BookResult {
   final String confidence; // 'high' | 'medium'
   final int position;
   final ResultSource source;
+  final LibraryAvailability availability;
 
   const BookResult({
     required this.title,
@@ -32,18 +39,31 @@ class BookResult {
     required this.confidence,
     required this.position,
     this.source = ResultSource.network,
+    this.availability = LibraryAvailability.unknown,
   });
+
+  BookResult copyWith({LibraryAvailability? availability}) => BookResult(
+        title: title,
+        author: author,
+        firstPublishYear: firstPublishYear,
+        callNumber: callNumber,
+        confidence: confidence,
+        position: position,
+        source: source,
+        availability: availability ?? this.availability,
+      );
 
   @override
   String toString() =>
-      'Book #$position [$source]: "$title" by $author'
+      'Book #$position [$source] {$availability}: "$title" by $author'
       '${firstPublishYear != null ? " ($firstPublishYear)" : ""}';
 }
 
 class ScanWord {
   final String text;
   final double centerX;
-  ScanWord({required this.text, required this.centerX});
+  final int order; // OCR reading-order index; restores word order within a spine
+  ScanWord({required this.text, required this.centerX, this.order = 0});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,50 +72,51 @@ class ScanWord {
 
 class BookScanner {
   static const _noiseWords = {
-    'press', 'books', 'publishing', 'inc', 'ltd', 'co', 'e',
+    // generic publisher suffixes
+    'press', 'books', 'publishing', 'publishers', 'inc', 'ltd', 'co', 'e', 'llc',
+    // common children's / fiction publishers likely to appear on spines
+    'scholastic', 'penguin', 'puffin', 'random', 'house', 'harper', 'collins',
+    'harpercollins', 'simon', 'schuster', 'macmillan', 'hachette', 'bloomsbury',
+    'usborne', 'egmont', 'faber', 'walker', 'hodder', 'oxford', 'cambridge',
+    'orchard', 'corgi', 'yearling', 'ember', 'delacorte', 'knopf', 'crown',
+    'roaring', 'brook', 'square', 'fish', 'little', 'brown', 'hyperion',
+    'disney', 'aladdin', 'atheneum', 'greenwillow', 'holt', 'putnam',
   };
 
   // ── 1. Spatial clustering ─────────────────────────────────────────────────
 
-  List<ScanWord> _extractWords(RecognizedText recognizedText) {
-    final words = <ScanWord>[];
-    for (final block in recognizedText.blocks) {
-      for (final line in block.lines) {
-        for (final element in line.elements) {
-          final box = element.boundingBox;
-          words.add(ScanWord(
-            text: element.text,
-            centerX: box.left + box.width / 2,
-          ));
-        }
-      }
-    }
-    return words;
-  }
-
   /// Split words into per-spine clusters by X-position gap.
-  /// Default 20 px matched the Pi; phone resolution may need 50–100.
+  /// [words] carry centerX in the ORIGINAL image frame (see [OcrService]), so
+  /// clustering is independent of which OCR rotation produced them.
+  /// Default 100 px suits phone resolution; the Pi webcam needed ~20.
   List<List<ScanWord>> clusterByGap(
-    RecognizedText recognizedText, {
-    double gapThreshold = 20,
+    List<ScanWord> words, {
+    double gapThreshold = 100,
   }) {
-    final words = _extractWords(recognizedText);
     if (words.isEmpty) return [];
 
-    words.sort((a, b) => a.centerX.compareTo(b.centerX));
+    final sorted = List<ScanWord>.from(words)
+      ..sort((a, b) => a.centerX.compareTo(b.centerX));
 
     final clusters = <List<ScanWord>>[];
-    var current = [words.first];
+    var current = [sorted.first];
 
-    for (var i = 1; i < words.length; i++) {
-      if (words[i].centerX - words[i - 1].centerX > gapThreshold) {
+    for (var i = 1; i < sorted.length; i++) {
+      if (sorted[i].centerX - sorted[i - 1].centerX > gapThreshold) {
         clusters.add(List.from(current));
-        current = [words[i]];
+        current = [sorted[i]];
       } else {
-        current.add(words[i]);
+        current.add(sorted[i]);
       }
     }
     clusters.add(current);
+
+    // Words were grouped by X (spine separation), but that jumbles their order
+    // within a spine. Restore the OCR engine's reading order so the query text
+    // reads correctly (e.g. "INVISIBLE MAN ELLISON", not "MAN ELLISON INVISIBLE").
+    for (final cluster in clusters) {
+      cluster.sort((a, b) => a.order.compareTo(b.order));
+    }
     return clusters;
   }
 
@@ -114,11 +135,14 @@ class BookScanner {
     return null;
   }
 
-  // ── 4. Smart Open Library search ──────────────────────────────────────────
+  // ── 4. Smart search ───────────────────────────────────────────────────────
 
   /// Returns a [BookResult] or null (book genuinely not found).
   /// Throws [_OfflineException] when connectivity fails so [scanBooks] can
   /// distinguish "not found" from "can't reach network".
+  ///
+  /// Google Books is tried first — it's far more forgiving of messy OCR queries
+  /// than Open Library — then Open Library as a fallback.
   Future<BookResult?> smartBookSearch(
     List<String> texts, {
     String? callNumber,
@@ -128,64 +152,123 @@ class BookScanner {
     final filtered = filterNoise(texts);
     if (filtered.isEmpty) return null;
 
+    final query = _normalizeQuery(filtered);
+    if (query.isEmpty) return null;
+
     // Cache check first — works fully offline.
     if (cache != null) {
       final hit = await cache.lookup(filtered, position);
       if (hit != null) return hit;
     }
 
-    // Strategy 1: combined q= search.
-    final combined = filtered.join(' ');
-    final uri1 = Uri.https('openlibrary.org', '/search.json', {'q': combined});
-    debugPrint('[ShelfScan] S1 → $uri1');
+    debugPrint('[ShelfScan] query: "$query"');
 
     BookResult? result;
     try {
-      result = await _fetch(uri1, callNumber: callNumber, position: position);
+      result = await _googleBooks(query, callNumber: callNumber, position: position);
+      result ??= await _openLibrary(query, callNumber: callNumber, position: position);
     } on _OfflineException {
-      rethrow; // propagate so scanBooks can set offline flag
+      rethrow;
     } catch (e) {
-      debugPrint('[ShelfScan] S1 error: $e');
+      debugPrint('[ShelfScan] search error: $e');
     }
 
-    // Strategy 2: title + author fallback.
-    if (result == null) {
-      final byLength = List<String>.from(filtered)
-        ..sort((a, b) => b.length.compareTo(a.length));
-      final params = <String, String>{'title': byLength.first};
-      if (byLength.length > 1) params['author'] = byLength[1];
-
-      final uri2 = Uri.https('openlibrary.org', '/search.json', params);
-      debugPrint('[ShelfScan] S2 → $uri2');
-
-      try {
-        result = await _fetch(
-          uri2,
-          callNumber: callNumber,
-          position: position,
-          forceConfidence: 'medium',
-        );
-      } on _OfflineException {
-        rethrow;
-      } catch (e) {
-        debugPrint('[ShelfScan] S2 error: $e');
-      }
-    }
-
-    // Cache the successful network result for future offline use.
     if (result != null && cache != null) {
       await cache.store(filtered, result);
     }
-
     return result;
   }
 
-  Future<BookResult?> _fetch(
-    Uri uri, {
-    required String? callNumber,
-    required int position,
-    String? forceConfidence,
+  /// Join tokens (already in reading order) into a clean query: strip
+  /// punctuation, keep short words, collapse whitespace.
+  String _normalizeQuery(List<String> tokens) {
+    final cleaned = tokens
+        .map((t) => t.replaceAll(RegExp(r'[^A-Za-z0-9]'), ' ').trim())
+        .where((t) => t.isNotEmpty)
+        .join(' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return cleaned;
+  }
+
+  // ── Google Books ──────────────────────────────────────────────────────────
+
+  Future<BookResult?> _googleBooks(
+    String query, {
+    String? callNumber,
+    int position = 0,
   }) async {
+    final uri = Uri.https('www.googleapis.com', '/books/v1/volumes', {
+      'q': query,
+      'maxResults': '5',
+      'printType': 'books',
+      'country': 'US',
+    });
+    final data = await _getJson(uri);
+    final items = data?['items'] as List?;
+    if (items == null || items.isEmpty) return null;
+
+    // Pick the candidate whose title+author overlaps the query most.
+    Map<String, dynamic>? best;
+    var bestScore = -1.0;
+    for (final item in items) {
+      final vi = (item as Map)['volumeInfo'];
+      if (vi is! Map) continue;
+      final title = vi['title']?.toString() ?? '';
+      final authors = (vi['authors'] as List?)?.join(' ') ?? '';
+      final score = _overlap(query, '$title $authors');
+      if (score > bestScore) {
+        bestScore = score;
+        best = vi.cast<String, dynamic>();
+      }
+    }
+    // No shared tokens at all → almost certainly wrong; let Open Library try.
+    if (best == null || bestScore <= 0) return null;
+
+    return BookResult(
+      title: best['title']?.toString() ?? 'Unknown',
+      author: (best['authors'] as List?)?.firstOrNull?.toString() ?? 'Unknown',
+      firstPublishYear: _year(best['publishedDate']?.toString()),
+      callNumber: callNumber,
+      confidence: bestScore >= 0.5 ? 'high' : 'medium',
+      position: position,
+      source: ResultSource.network,
+    );
+  }
+
+  // ── Open Library (fallback) ───────────────────────────────────────────────
+
+  Future<BookResult?> _openLibrary(
+    String query, {
+    String? callNumber,
+    int position = 0,
+  }) async {
+    final uri = Uri.https('openlibrary.org', '/search.json', {
+      'q': query,
+      'limit': '5',
+      'fields': 'title,author_name,first_publish_year,numFound',
+    });
+    final data = await _getJson(uri);
+    final docs = data?['docs'] as List?;
+    if (docs == null || docs.isEmpty) return null;
+
+    final best = docs.first as Map<String, dynamic>;
+    final numFound = (data?['numFound'] as num?)?.toInt() ?? 0;
+    return BookResult(
+      title: best['title'] as String? ?? 'Unknown',
+      author: (best['author_name'] as List?)?.firstOrNull as String? ?? 'Unknown',
+      firstPublishYear: best['first_publish_year']?.toString(),
+      callNumber: callNumber,
+      confidence: numFound < 10 ? 'high' : 'medium',
+      position: position,
+      source: ResultSource.network,
+    );
+  }
+
+  // ── HTTP + text helpers ───────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>?> _getJson(Uri uri) async {
+    debugPrint('[ShelfScan] GET $uri');
     http.Response res;
     try {
       res = await http.get(uri).timeout(const Duration(seconds: 6));
@@ -194,34 +277,39 @@ class BookScanner {
     } on http.ClientException catch (e) {
       throw _OfflineException(e.message);
     }
-    // Non-2xx or empty body → treat as "not found", not offline.
     if (res.statusCode < 200 || res.statusCode >= 300) return null;
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
 
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final docs = data['docs'] as List?;
-    if (docs == null || docs.isEmpty) return null;
+  /// Fraction of query tokens (2+ chars) that appear in [candidate].
+  double _overlap(String query, String candidate) {
+    final q = _tokenSet(query);
+    if (q.isEmpty) return 0;
+    final c = _tokenSet(candidate);
+    final hits = q.where(c.contains).length;
+    return hits / q.length;
+  }
 
-    final best = docs.first as Map<String, dynamic>;
-    final numFound = (data['numFound'] as num?)?.toInt() ?? 0;
-    return BookResult(
-      title: best['title'] as String? ?? 'Unknown',
-      author: (best['author_name'] as List?)?.firstOrNull as String? ?? 'Unknown',
-      firstPublishYear: best['first_publish_year']?.toString(),
-      callNumber: callNumber,
-      confidence: forceConfidence ?? (numFound < 10 ? 'high' : 'medium'),
-      position: position,
-      source: ResultSource.network,
-    );
+  Set<String> _tokenSet(String s) => s
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((t) => t.length > 1)
+      .toSet();
+
+  String? _year(String? s) {
+    if (s == null) return null;
+    return RegExp(r'\d{4}').firstMatch(s)?.group(0);
   }
 
   // ── 5. Full pipeline ──────────────────────────────────────────────────────
 
   Future<ScanResult> scanBooks(
-    RecognizedText recognizedText, {
-    double gapThreshold = 20,
+    List<ScanWord> words, {
+    double gapThreshold = 100,
     BookCache? cache,
+    LibraryStatusSource? statusSource,
   }) async {
-    final clusters = clusterByGap(recognizedText, gapThreshold: gapThreshold);
+    final clusters = clusterByGap(words, gapThreshold: gapThreshold);
     debugPrint('[ShelfScan] clusters: ${clusters.length}');
     if (clusters.isEmpty) return const ScanResult(books: [], isOffline: false);
 
@@ -265,8 +353,22 @@ class BookScanner {
 
     final results = await Future.wait(futures);
 
-    final books = results.whereType<BookResult>().toList()
+    var books = results.whereType<BookResult>().toList()
       ..sort((a, b) => a.position.compareTo(b.position));
+
+    // Overlay ILS circulation status (checked-out books were reshelved by
+    // mistake and should go to the Book Return, not be sorted on the shelf).
+    if (statusSource != null && books.isNotEmpty) {
+      try {
+        final statuses = await statusSource.statusFor(books);
+        books = [
+          for (final b in books)
+            b.copyWith(availability: statuses[b.position]),
+        ];
+      } catch (e) {
+        debugPrint('[ShelfScan] status lookup failed: $e');
+      }
+    }
 
     debugPrint('[ShelfScan] found ${books.length}, offline=$offline');
     for (final b in books) debugPrint('[ShelfScan] $b');
@@ -291,4 +393,33 @@ class _OfflineException implements Exception {
   const _OfflineException(this.message);
   @override
   String toString() => 'OfflineException: $message';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Library circulation status — pluggable source
+//
+// SWAP POINT: implement this against a real feed once Georgetown PL grants
+// access — e.g. a nightly export of checked-out juvenile items, the catalog's
+// /catalog/ajax_backend search endpoint, or a SIP2 proxy. Return a map of
+// book.position → availability. The UI already reacts to `checkedOut`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+abstract class LibraryStatusSource {
+  Future<Map<int, LibraryAvailability>> statusFor(List<BookResult> books);
+}
+
+/// Placeholder until a real feed is wired up. Deterministically flags every
+/// third book as checked-out so the "return to Book Return" UI is demonstrable.
+class MockLibraryStatusSource implements LibraryStatusSource {
+  const MockLibraryStatusSource();
+
+  @override
+  Future<Map<int, LibraryAvailability>> statusFor(List<BookResult> books) async {
+    return {
+      for (final b in books)
+        b.position: b.position % 3 == 0
+            ? LibraryAvailability.checkedOut
+            : LibraryAvailability.available,
+    };
+  }
 }

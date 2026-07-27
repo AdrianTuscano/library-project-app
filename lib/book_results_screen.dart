@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'book_scanner.dart';
+import 'shelf_sort_view.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design tokens
@@ -13,7 +13,6 @@ const _textPrimary = Colors.white;
 const _textSecondary = Color(0xFF9BA0AB);
 const _textTertiary = Color(0xFF5C6270);
 const _accentBlue = Color(0xFF4E9BFF);
-const _accentGreen = Color(0xFF30D158);
 const _accentAmber = Color(0xFFFF9F0A);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,16 +61,18 @@ class BookResultsScreen extends StatefulWidget {
   /// Changed from Future<List<BookResult>> to Future<ScanResult> so we also
   /// carry the isOffline flag through to the UI.
   final Future<ScanResult> resultsFuture;
-  final RecognizedText rawText;
+  final List<ScanWord> words;
   final double gapThreshold;
   final int clusterCount;
+  final String rotationUsed;
 
   const BookResultsScreen({
     super.key,
     required this.resultsFuture,
-    required this.rawText,
+    required this.words,
     required this.gapThreshold,
     required this.clusterCount,
+    required this.rotationUsed,
   });
 
   @override
@@ -102,7 +103,13 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
           child: Container(height: 1, color: _cardBorder),
         ),
       ),
-      body: FutureBuilder<ScanResult>(
+      // SafeArea keeps content clear of the landscape notch; the ConstrainedBox
+      // stops cards from stretching the full width of a wide landscape screen.
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: FutureBuilder<ScanResult>(
         future: widget.resultsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
@@ -117,16 +124,19 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
 
           if (books.isEmpty) return const _EmptyView();
 
-          final sorted = _applySort(books, _sortOrder);
           return _ResultsView(
-            books: sorted,
+            books: books, // position (shelf) order
             isOffline: scanResult.isOffline,
             sortOrder: _sortOrder,
             onSortChanged: (s) => setState(() => _sortOrder = s),
-            rawText: widget.rawText,
+            words: widget.words,
             gapThreshold: widget.gapThreshold,
+            rotationUsed: widget.rotationUsed,
           );
         },
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -234,7 +244,7 @@ class _EmptyView extends StatelessWidget {
               (Icons.wb_sunny_outlined, 'Good, even lighting on the spines'),
               (Icons.do_not_touch_outlined, 'Hold the camera steady while capturing'),
               (Icons.crop_rotate, 'Spines should face the camera directly'),
-              (Icons.smartphone, 'Phone sideways — spines become vertical columns'),
+              (Icons.view_column_outlined, 'Fill the frame with the row of spines'),
             ].map((t) => _TipRow(icon: t.$1, tip: t.$2)),
           ],
         ),
@@ -319,16 +329,18 @@ class _ResultsView extends StatelessWidget {
   final bool isOffline;
   final _SortOrder sortOrder;
   final ValueChanged<_SortOrder> onSortChanged;
-  final RecognizedText rawText;
+  final List<ScanWord> words;
   final double gapThreshold;
+  final String rotationUsed;
 
   const _ResultsView({
     required this.books,
     required this.isOffline,
     required this.sortOrder,
     required this.onSortChanged,
-    required this.rawText,
+    required this.words,
     required this.gapThreshold,
+    required this.rotationUsed,
   });
 
   @override
@@ -337,6 +349,14 @@ class _ResultsView extends StatelessWidget {
         books.any((b) => b.source == ResultSource.cache);
     final hasUnavailable =
         books.any((b) => b.source == ResultSource.unavailable);
+
+    // Current = shelf (position) order; target = the chosen sort.
+    final sortedOrder = _applySort(books, sortOrder);
+    final targetLabel = switch (sortOrder) {
+      _SortOrder.shelf => 'shelf position',
+      _SortOrder.author => 'author',
+      _SortOrder.dewey => 'call number',
+    };
 
     return CustomScrollView(
       slivers: [
@@ -354,16 +374,14 @@ class _ResultsView extends StatelessWidget {
           child: _SortBar(current: sortOrder, onChanged: onSortChanged),
         ),
 
-        // ── Book cards ───────────────────────────────────────────────────────
+        // ── Shelf sort diagram ───────────────────────────────────────────────
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-          sliver: SliverList.separated(
-            itemCount: books.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (_, i) => _BookCard(
-              book: books[i],
-              isFirst: i == 0,
-              isLast: i == books.length - 1,
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 24),
+          sliver: SliverToBoxAdapter(
+            child: ShelfSortView(
+              currentOrder: books,
+              sortedOrder: sortedOrder,
+              targetLabel: targetLabel,
             ),
           ),
         ),
@@ -371,7 +389,9 @@ class _ResultsView extends StatelessWidget {
         // ── Debug disclosure ─────────────────────────────────────────────────
         SliverToBoxAdapter(
           child: _DebugDisclosure(
-              rawText: rawText, gapThreshold: gapThreshold),
+              words: words,
+              gapThreshold: gapThreshold,
+              rotationUsed: rotationUsed),
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
@@ -482,200 +502,18 @@ class _SortBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Book card
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _BookCard extends StatelessWidget {
-  final BookResult book;
-  final bool isFirst;
-  final bool isLast;
-
-  const _BookCard({required this.book, required this.isFirst, required this.isLast});
-
-  @override
-  Widget build(BuildContext context) {
-    final isUnavailable = book.source == ResultSource.unavailable;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _cardBorder),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Position + source badges ──
-          Row(
-            children: [
-              _PositionBadge(position: book.position, isBottom: isFirst, isTop: isLast),
-              const SizedBox(width: 6),
-              if (book.source == ResultSource.cache)
-                _TagBadge(label: 'Cached', color: _accentBlue),
-              if (isUnavailable)
-                _TagBadge(label: 'No network', color: _accentAmber),
-              const Spacer(),
-              if (!isUnavailable) _ConfidenceDot(confidence: book.confidence),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // ── Title ──
-          Text(
-            book.title,
-            style: TextStyle(
-              color: isUnavailable ? _textSecondary : _textPrimary,
-              fontSize: isUnavailable ? 14 : 16,
-              fontWeight: FontWeight.w700,
-              height: 1.3,
-              letterSpacing: -0.2,
-              fontStyle: isUnavailable ? FontStyle.italic : FontStyle.normal,
-            ),
-          ),
-
-          // ── Author ──
-          if (book.author.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(book.author,
-                style: const TextStyle(color: _textSecondary, fontSize: 14)),
-          ],
-
-          // ── Year + call number ──
-          if (book.firstPublishYear != null || book.callNumber != null) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                if (book.firstPublishYear != null)
-                  _MetaTag(label: book.firstPublishYear!),
-                if (book.callNumber != null)
-                  _MetaTag(label: book.callNumber!, isCallNumber: true),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _PositionBadge extends StatelessWidget {
-  final int position;
-  final bool isBottom;
-  final bool isTop;
-  const _PositionBadge(
-      {required this.position, required this.isBottom, required this.isTop});
-
-  @override
-  Widget build(BuildContext context) {
-    String label = '#$position';
-    if (isBottom) label += '  Bottom';
-    if (isTop) label += '  Top';
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: _accentBlue.withOpacity(0.14),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _accentBlue.withOpacity(0.35)),
-      ),
-      child: Text(label,
-          style: const TextStyle(
-              color: _accentBlue,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2)),
-    );
-  }
-}
-
-class _TagBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const _TagBadge({required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              color: color, fontSize: 10, fontWeight: FontWeight.w600)),
-    );
-  }
-}
-
-class _ConfidenceDot extends StatelessWidget {
-  final String confidence;
-  const _ConfidenceDot({required this.confidence});
-
-  @override
-  Widget build(BuildContext context) {
-    final isHigh = confidence == 'high';
-    final color = isHigh ? _accentGreen : _accentAmber;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-        const SizedBox(width: 5),
-        Text(isHigh ? 'High match' : 'Possible match',
-            style: TextStyle(
-                color: color, fontSize: 11, fontWeight: FontWeight.w500)),
-      ],
-    );
-  }
-}
-
-class _MetaTag extends StatelessWidget {
-  final String label;
-  final bool isCallNumber;
-  const _MetaTag({required this.label, this.isCallNumber = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: isCallNumber
-            ? const Color(0xFF7B5EA7).withOpacity(0.15)
-            : Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isCallNumber
-              ? const Color(0xFF7B5EA7).withOpacity(0.4)
-              : Colors.white.withOpacity(0.1),
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: isCallNumber ? const Color(0xFFBB9FE2) : _textTertiary,
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          fontFamily: isCallNumber ? 'monospace' : null,
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Debug disclosure (collapsed by default)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DebugDisclosure extends StatefulWidget {
-  final RecognizedText rawText;
+  final List<ScanWord> words;
   final double gapThreshold;
-  const _DebugDisclosure({required this.rawText, required this.gapThreshold});
+  final String rotationUsed;
+  const _DebugDisclosure({
+    required this.words,
+    required this.gapThreshold,
+    required this.rotationUsed,
+  });
 
   @override
   State<_DebugDisclosure> createState() => _DebugDisclosureState();
@@ -688,9 +526,8 @@ class _DebugDisclosureState extends State<_DebugDisclosure> {
   Widget build(BuildContext context) {
     final scanner = BookScanner();
     final clusters =
-        scanner.clusterByGap(widget.rawText, gapThreshold: widget.gapThreshold);
-    final totalWords = widget.rawText.blocks.fold(
-        0, (n, b) => n + b.lines.fold(0, (m, l) => m + l.elements.length));
+        scanner.clusterByGap(widget.words, gapThreshold: widget.gapThreshold);
+    final totalWords = widget.words.length;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -703,7 +540,7 @@ class _DebugDisclosureState extends State<_DebugDisclosure> {
             child: Row(
               children: [
                 Text(
-                  'Debug — ${clusters.length} clusters · $totalWords words · gap ${widget.gapThreshold.toStringAsFixed(0)} px',
+                  'Debug — ${clusters.length} clusters · $totalWords words · gap ${widget.gapThreshold.toStringAsFixed(0)} px · OCR ${widget.rotationUsed}',
                   style: const TextStyle(color: _textTertiary, fontSize: 11),
                 ),
                 const Spacer(),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'book_cache.dart';
 import 'camera_screen.dart';
@@ -6,10 +7,21 @@ import 'camera_screen.dart';
 List<CameraDescription> cameras = [];
 final bookCache = BookCache();
 
+// TESTING: set true to wipe the on-device book cache on launch, so repeat
+// scans always hit a fresh Open Library lookup. Set back to false for demos.
+const bool kClearCacheOnLaunch = true;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Lock to ONE landscape orientation so the camera sensor never flips
+  // mid-session. landscapeLeft = charging port on the LEFT. If your port ends
+  // up on the right, change this single value to landscapeRight.
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+  ]);
   cameras = await availableCameras();
   await bookCache.init();
+  if (kClearCacheOnLaunch) await bookCache.clear();
   runApp(const ShelfScanApp());
 }
 

@@ -16,6 +16,9 @@ dependencies:
   # On-device text recognition (ML Kit, no cloud)
   google_mlkit_text_recognition: ^0.13.0
 
+  # Image decode/rotate for multi-orientation OCR (spine titles are rotated 90°)
+  image: ^4.1.0
+
   # HTTP for Open Library API lookups
   http: ^1.2.0
 

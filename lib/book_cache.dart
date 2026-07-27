@@ -77,6 +77,18 @@ class BookCache {
     }
   }
 
+  /// Wipe every cached result. Used during testing to avoid stale lookups.
+  Future<void> clear() async {
+    final db = _db;
+    if (db == null) return;
+    try {
+      final n = await db.delete(_table);
+      debugPrint('[BookCache] cleared $n rows');
+    } catch (e) {
+      debugPrint('[BookCache] clear error: $e');
+    }
+  }
+
   Future<void> store(List<String> texts, BookResult result) async {
     final db = _db;
     if (db == null) return;
