@@ -99,7 +99,8 @@ class _BookResultsScreenState extends State<BookResultsScreen>
 
     return Scaffold(
       backgroundColor: kBgDark,
-      body: Center(
+      body: SafeArea(
+        child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -124,16 +125,17 @@ class _BookResultsScreenState extends State<BookResultsScreen>
             ),
             const SizedBox(height: 24),
             Text(
-              matching ? 'Matching records' : 'Reading spines',
+              matching ? 'Identifying books' : 'Reading spines',
               style: kHeading(24, color: const Color(0xFFEFE9E0)),
             ),
             const SizedBox(height: 6),
             Text(
-              '${rev.clamp(0, total)} of $total spines · titles and authors from the catalogue',
+              matching ? 'Matching titles and authors…' : 'Scanning your shelf…',
               style: kLabel(12, color: const Color(0xFF8D857A)),
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -165,7 +167,8 @@ class _BookResultsScreenState extends State<BookResultsScreen>
 
     return Scaffold(
       backgroundColor: kBgScreen,
-      body: Column(
+      body: SafeArea(
+        child: Column(
         children: [
           _buildNavBar(books),
           Expanded(
@@ -185,6 +188,7 @@ class _BookResultsScreenState extends State<BookResultsScreen>
             ),
           ),
         ],
+      ),
       ),
     );
   }

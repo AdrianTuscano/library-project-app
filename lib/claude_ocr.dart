@@ -20,11 +20,15 @@ const _kPrompt = '''
 You are looking at a photo of a library bookshelf.
 
 Step 1 — Read every spine carefully, left to right, and draft a list of each book as:
-Title — Author
+Full Title — Author Full Name
 
-Step 2 — Review your draft. For each entry ask: is this a real published book with that exact title and author? Correct any misread spines — wrong author, wrong title, or series banner confused with the individual book title. Series books often print the series name large and the actual title small; make sure you return the actual book title, not just the series name.
+Step 2 — Review your draft. For each entry:
+- Is this a real published book? Correct any misread spines.
+- Include the complete title with subtitle (e.g. "Scrum: The Art of Doing Twice the Work in Half the Time", not just "Scrum").
+- Series books often print the series name large and the individual title small — return the individual book title, not just the series name.
+- Use the author's full name as it appears on the cover.
 
-Return ONLY the final corrected list — one book per line, leftmost first. No commentary, no numbering, no markdown.
+Return ONLY the final corrected list — one book per line, leftmost first. Format: Title — Author. No commentary, no numbering, no markdown.
 ''';
 
 class ClaudeOcr {

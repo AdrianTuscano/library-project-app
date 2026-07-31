@@ -182,6 +182,26 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       return const _PermissionDeniedView();
     }
 
+    // Show rotate prompt if the phone hasn't gone landscape yet.
+    final size = MediaQuery.of(context).size;
+    if (size.width < size.height) {
+      return Scaffold(
+        backgroundColor: kBgDark,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.screen_rotation, color: kGold, size: 48),
+              const SizedBox(height: 16),
+              Text('Rotate your phone', style: kHeading(22, color: const Color(0xFFEFE9E0))),
+              const SizedBox(height: 8),
+              Text('ShelfScan works in landscape mode', style: kLabel(13, color: const Color(0xFF8D857A))),
+            ],
+          ),
+        ),
+      );
+    }
+
     final controller = _controller;
     return Scaffold(
       backgroundColor: kBgDark,
@@ -199,7 +219,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
             // ── Instruction text ─────────────────────────────────────────────
             Positioned(
-              top: 16,
+              top: MediaQuery.of(context).padding.top + 12,
               left: 0,
               right: 0,
               child: Center(
@@ -212,7 +232,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
             // ── Shutter button ────────────────────────────────────────────────
             Positioned(
-              bottom: 22,
+              bottom: MediaQuery.of(context).padding.bottom + 16,
               left: 0,
               right: 0,
               child: Center(

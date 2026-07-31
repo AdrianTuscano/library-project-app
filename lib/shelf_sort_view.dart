@@ -74,7 +74,8 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
 
     return Scaffold(
       backgroundColor: kBgScreen,
-      body: Column(
+      body: SafeArea(
+        child: Column(
         children: [
           _buildNavBar(fixes.length),
           Expanded(
@@ -94,6 +95,7 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
