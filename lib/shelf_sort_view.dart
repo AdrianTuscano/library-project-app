@@ -36,16 +36,8 @@ List<_SortItem> _computeSort(List<BookResult> books) {
   });
 }
 
-// Spine dimensions — deterministic from title/author
-int _spineW(BookResult b) {
-  final hash = b.title.codeUnits.fold(0, (a, c) => a ^ c);
-  return 22 + (hash.abs() % 22);
-}
-
-int _spineH(BookResult b) {
-  final hash = (b.author + b.title).codeUnits.fold(0, (a, c) => a ^ c);
-  return 110 + (hash.abs() % 60);
-}
+int _spineW(BookResult b) => spineWidth(b.title);
+int _spineH(BookResult b) => spineHeight(b.title, b.author);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen
@@ -356,7 +348,8 @@ class _ArcPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ArcPainter old) => false;
+  bool shouldRepaint(covariant _ArcPainter old) =>
+      old.items != items || old.centerXs != centerXs || old.spineTopYs != spineTopYs;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

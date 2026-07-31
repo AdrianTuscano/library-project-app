@@ -11,6 +11,5 @@ const String _envAnthropicKey = String.fromEnvironment('ANTHROPIC_KEY');
 final String kCloudVisionApiKey =
     _envVisionKey.isNotEmpty ? _envVisionKey : secrets.kVisionApiKey;
 
-// ignore: prefer_const_declarations
 final String kAnthropicApiKey =
     _envAnthropicKey.isNotEmpty ? _envAnthropicKey : secrets.kAnthropicApiKey;

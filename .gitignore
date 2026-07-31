@@ -44,5 +44,5 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Local secrets — Cloud Vision API key (keep the .example, ignore the real one)
-lib/ocr_secrets.dart
+# Local secrets — keep the .example, ignore any ocr_secrets variant
+lib/ocr_secrets*.dart

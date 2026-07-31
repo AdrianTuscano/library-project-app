@@ -25,6 +25,7 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
   CameraController? _controller;
   _PermState _permState = _PermState.checking;
+  String? _cameraError;
   bool _isCapturing = false;
   double _savedVolume = 0.5;   // restored after every press so volume never drifts
   bool _resetting = false;     // true while we're restoring — suppresses the callback loop
@@ -119,19 +120,28 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   Future<void> _initCamera() async {
-    if (cameras.isEmpty) return;
-    final controller = CameraController(
-      cameras[0],
-      ResolutionPreset.max,
-      enableAudio: false,
-    );
-    await controller.initialize();
-    if (!mounted) return;
-    _controller = controller;
-    setState(() {});
+    if (cameras.isEmpty) {
+      setState(() => _cameraError = 'No camera found on this device');
+      return;
+    }
+    try {
+      final controller = CameraController(
+        cameras[0],
+        ResolutionPreset.max,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      if (!mounted) return;
+      _controller = controller;
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cameraError = 'Camera unavailable: $e');
+    }
   }
 
   Future<void> _capture() async {
+    if (!mounted) return;
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized || _isCapturing) return;
 
@@ -185,7 +195,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         ),
       );
     } catch (e) {
-      await _controller?.setFlashMode(FlashMode.off);
+      try { await _controller?.setFlashMode(FlashMode.off); } catch (_) {}
       debugPrint('[CameraScreen] capture error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -218,6 +228,22 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
     if (_permState == _PermState.denied) {
       return const _PermissionDeniedView();
+    }
+    if (_cameraError != null) {
+      return Scaffold(
+        backgroundColor: kBgDark,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Camera error', style: kHeading(22, color: const Color(0xFFEFE9E0))),
+              const SizedBox(height: 10),
+              Text(_cameraError!, style: kBody(13, color: const Color(0xFF8D857A)),
+                  textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+      );
     }
 
     // Show rotate prompt if the phone hasn't gone landscape yet.
@@ -323,7 +349,7 @@ class _GuidePainter extends CustomPainter {
         Rect.fromLTRB(left, top, size.width - right, size.height - bottom));
     final vignette = Path.combine(PathOperation.difference, outer, inner);
 
-    canvas.drawPath(vignette, Paint()..color = const Color(0x66100F0E));
+    canvas.drawPath(vignette, Paint()..color = kBgDark.withValues(alpha: 0.4));
 
     canvas.drawRect(
       Rect.fromLTRB(left, top, size.width - right, size.height - bottom),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -88,15 +89,22 @@ class ClaudeOcr {
       ).timeout(const Duration(seconds: 45));
     } on SocketException catch (e) {
       throw OcrException('Network error: ${e.message}');
+    } on TimeoutException {
+      throw const OcrException('Request timed out — check your connection');
     }
 
     if (res.statusCode != 200) {
-      throw OcrException('Claude API ${res.statusCode}: ${res.body}');
+      debugPrint('[ClaudeOcr] API error ${res.statusCode}: ${res.body}');
+      throw OcrException('Claude API error (${res.statusCode})');
     }
 
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final content = (data['content'] as List?)?.first as Map?;
-    final rawText = content?['text'] as String? ?? '';
+    final contentList = data['content'] as List?;
+    final block = contentList?.firstWhere(
+      (b) => (b as Map?)?['type'] == 'text',
+      orElse: () => null,
+    ) as Map?;
+    final rawText = block?['text'] as String? ?? '';
 
     debugPrint('[ClaudeOcr] raw response:\n$rawText');
 
@@ -114,7 +122,7 @@ class ClaudeOcr {
   /// Parse "Title — Author" lines directly into BookResult objects.
   /// Throws [NoBooksFoundException] if Claude returned the sentinel.
   static List<BookResult> _parseBooks(String text) {
-    if (text.trim().startsWith(_kSentinel)) throw const NoBooksFoundException();
+    if (text.contains(_kSentinel)) throw const NoBooksFoundException();
 
     final books = <BookResult>[];
     var position = 1;
@@ -163,7 +171,8 @@ String _encodeImage(String path) {
         : decoded;
 
     return base64Encode(img.encodeJpg(scaled, quality: 90));
-  } catch (_) {
+  } catch (e) {
+    debugPrint('[ClaudeOcr] image encode failed: $e');
     return '';
   }
 }

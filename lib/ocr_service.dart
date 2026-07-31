@@ -80,8 +80,8 @@ class OcrService {
       );
     } finally {
       await recognizer.close();
-      _safeDelete(cwPath);
-      _safeDelete(ccwPath);
+      if (cwPath != null) File(cwPath).delete().ignore();
+      if (ccwPath != null) File(ccwPath).delete().ignore();
     }
   }
 
@@ -138,13 +138,6 @@ class OcrService {
     );
   }
 
-  void _safeDelete(String? path) {
-    if (path == null) return;
-    try {
-      final f = File(path);
-      if (f.existsSync()) f.deleteSync();
-    } catch (_) {/* best effort */}
-  }
 }
 
 class _Variant {
@@ -206,7 +199,8 @@ String _cropCenter(List<dynamic> args) {
     final y = ((oriented.height - ch) / 2).round();
 
     final cropped = img.copyCrop(oriented, x: x, y: y, width: cw, height: ch);
-    final out = '${File(path).parent.path}/_scan_crop.jpg';
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final out = '${File(path).parent.path}/_scan_crop_$ts.jpg';
     File(out).writeAsBytesSync(img.encodeJpg(cropped, quality: 92));
     return out;
   } catch (_) {
@@ -223,8 +217,9 @@ Map<String, Object> _prepareRotations(String path) {
     if (decoded == null) return {};
 
     final dir = File(path).parent.path;
-    final cwPath = '$dir/_ocr_cw.jpg';
-    final ccwPath = '$dir/_ocr_ccw.jpg';
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final cwPath = '$dir/_ocr_cw_$ts.jpg';
+    final ccwPath = '$dir/_ocr_ccw_$ts.jpg';
 
     File(cwPath).writeAsBytesSync(
         img.encodeJpg(img.copyRotate(decoded, angle: 90), quality: 92));

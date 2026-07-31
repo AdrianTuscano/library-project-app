@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
@@ -8,14 +9,16 @@ import 'design.dart';
 List<CameraDescription> cameras = [];
 final bookCache = BookCache();
 
-const bool kClearCacheOnLaunch = true;
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft]);
-  cameras = await availableCameras();
+  try {
+    cameras = await availableCameras();
+  } catch (_) {
+    cameras = [];
+  }
   await bookCache.init();
-  if (kClearCacheOnLaunch) await bookCache.clear();
+  if (kDebugMode) await bookCache.clear();
   runApp(const ShelfScanApp());
 }
 

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart' show NoBooksFoundException;
 import 'design.dart';
@@ -35,8 +34,7 @@ class BookResultsScreen extends StatefulWidget {
   State<BookResultsScreen> createState() => _BookResultsScreenState();
 }
 
-class _BookResultsScreenState extends State<BookResultsScreen>
-    with SingleTickerProviderStateMixin {
+class _BookResultsScreenState extends State<BookResultsScreen> {
   ScanResult? _result;
   String? _error;
   bool _noBooks = false;
@@ -157,19 +155,21 @@ class _BookResultsScreenState extends State<BookResultsScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Faded bars — same visual language as processing, but dim
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  for (var i = 0; i < _placeholders.length; i++)
-                    Container(
-                      margin: const EdgeInsets.only(right: 6),
-                      width: _placeholders[i].w,
-                      height: _placeholders[i].h,
-                      color: const Color(0xFF26241F),
-                    ),
-                ],
+              SizedBox(
+                height: 180,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < _placeholders.length; i++)
+                      Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        width: _placeholders[i].w,
+                        height: _placeholders[i].h,
+                        color: const Color(0xFF26241F),
+                      ),
+                  ],
+                ),
               ),
               const SizedBox(height: 28),
               Text('No books detected',
@@ -418,15 +418,8 @@ class _SpineBar extends StatelessWidget {
     required this.onTap,
   });
 
-  int get _w {
-    final hash = book.title.codeUnits.fold(0, (a, c) => a ^ c);
-    return 22 + (hash.abs() % 22);
-  }
-
-  int get _h {
-    final hash = (book.author + book.title).codeUnits.fold(0, (a, c) => a ^ c);
-    return 130 + (hash.abs() % 70);
-  }
+  int get _w => spineWidth(book.title);
+  int get _h => spineHeight(book.title, book.author);
 
   @override
   Widget build(BuildContext context) {
@@ -449,11 +442,7 @@ class _SpineBar extends StatelessWidget {
             quarterTurns: 3,
             child: Text(
               '${book.position}  ${book.title}',
-              style: GoogleFonts.lora(
-                fontSize: 10,
-                color: const Color(0xFFF1ECE4),
-                letterSpacing: 0.05,
-              ),
+              style: kLabel(10, color: const Color(0xFFF1ECE4), tracking: 0.05),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),

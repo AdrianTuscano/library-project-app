@@ -34,5 +34,17 @@ TextStyle kHeading(double size, {Color color = kText}) =>
 TextStyle kBody(double size, {Color color = kText, FontStyle style = FontStyle.normal}) =>
     GoogleFonts.lora(fontSize: size, color: color, height: 1.4, fontStyle: style);
 
-TextStyle kLabel(double size, {Color color = kTextFaint, double tracking = 0}) =>
-    GoogleFonts.lora(fontSize: size, color: color, letterSpacing: tracking);
+TextStyle kLabel(double size, {Color color = kTextFaint, double tracking = 0, FontStyle style = FontStyle.normal}) =>
+    GoogleFonts.lora(fontSize: size, color: color, letterSpacing: tracking, fontStyle: style);
+
+// ── Spine dimensions (deterministic hash so both shelf views stay in sync) ────
+
+int spineWidth(String title) {
+  final hash = title.codeUnits.fold(0, (a, c) => a ^ c);
+  return 22 + (hash.abs() % 22);
+}
+
+int spineHeight(String title, String author) {
+  final hash = (author + title).codeUnits.fold(0, (a, c) => a ^ c);
+  return 130 + (hash.abs() % 70);
+}
