@@ -1,19 +1,16 @@
 import 'ocr_secrets.dart' as secrets;
 
-// OCR backend configuration.
-//
-// Cloud Vision gives markedly better results on rotated / dense spine text than
-// on-device ML Kit. It activates automatically when an API key is available; if
-// the key is blank or a cloud call fails, the app falls back to on-device OCR.
-//
-// The key lives in lib/ocr_secrets.dart, which is git-ignored so it never gets
-// committed (this repo is public). A --dart-define=VISION_KEY=... overrides it
-// if you'd rather pass it at build time.
-//
-// SECURITY: a key shipped in a mobile binary can be extracted. In the Google
-// Cloud console, restrict this key to the Cloud Vision API only (and ideally to
-// your app's bundle id). For real distribution, proxy calls through a backend.
-const String _envKey = String.fromEnvironment('VISION_KEY');
+// OCR backend priority: Claude Vision → Cloud Vision → on-device ML Kit.
+// Keys live in lib/ocr_secrets.dart (git-ignored). Dart-define env vars
+// override at build time. Claude is tried first when its key is present —
+// it reads AND identifies books in one step, giving much better accuracy.
+
+const String _envVisionKey = String.fromEnvironment('VISION_KEY');
+const String _envAnthropicKey = String.fromEnvironment('ANTHROPIC_KEY');
 
 final String kCloudVisionApiKey =
-    _envKey.isNotEmpty ? _envKey : secrets.kVisionApiKey;
+    _envVisionKey.isNotEmpty ? _envVisionKey : secrets.kVisionApiKey;
+
+// ignore: prefer_const_declarations
+final String kAnthropicApiKey =
+    _envAnthropicKey.isNotEmpty ? _envAnthropicKey : secrets.kAnthropicApiKey;

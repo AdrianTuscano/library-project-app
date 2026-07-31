@@ -1,9 +1,8 @@
 // TEMPLATE — committed to the repo as documentation.
 //
-// On a fresh clone, copy this file to `ocr_secrets.dart` (which is git-ignored)
-// and paste your Cloud Vision API key there:
+// On a fresh clone: cp lib/ocr_secrets.example.dart lib/ocr_secrets.dart
+// then paste your keys. Leave blank to fall back to on-device OCR.
 //
-//   cp lib/ocr_secrets.example.dart lib/ocr_secrets.dart
-//
-// Leave it blank to use on-device OCR only.
+// OCR priority: Claude Vision → Cloud Vision → on-device ML Kit.
 const String kVisionApiKey = '';
+const String kAnthropicApiKey = '';

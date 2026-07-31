@@ -5,13 +5,14 @@ import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'book_results_screen.dart';
 import 'book_scanner.dart';
+import 'claude_ocr.dart';
 import 'cloud_vision_ocr.dart';
 import 'design.dart';
 import 'ocr_config.dart';
 import 'ocr_service.dart';
 import 'main.dart';
 
-const double _kGapThreshold = 100;
+const double _kGapThreshold = 100; // only used by fallback OCR path
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -92,17 +93,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     setState(() {});
   }
 
-  Future<OcrResult> _runOcr(String path) async {
-    if (kCloudVisionApiKey.isNotEmpty) {
-      try {
-        return await CloudVisionOcr(apiKey: kCloudVisionApiKey).recognize(path);
-      } catch (e) {
-        debugPrint('[CameraScreen] cloud OCR failed, using on-device: $e');
-      }
-    }
-    return OcrService().recognize(path);
-  }
-
   Future<void> _capture() async {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized || _isCapturing) return;
@@ -119,24 +109,35 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       await controller.setFlashMode(FlashMode.off);
 
       final scanPath = await cropToVisibleRegion(imageFile.path, frac.w, frac.h);
-      final ocr = await _runOcr(scanPath);
-      await File(imageFile.path).delete();
-      if (scanPath != imageFile.path) await File(scanPath).delete();
 
-      if (ocr.words.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No text detected — try better lighting or hold steadier')),
+      Future<ScanResult> resultsFuture;
+
+      if (kAnthropicApiKey.isNotEmpty) {
+        // Claude end-to-end: identifies books directly from the photo.
+        // No Open Library / Google Books needed.
+        resultsFuture = ClaudeOcr(apiKey: kAnthropicApiKey).scan(scanPath);
+      } else {
+        // Fallback: Cloud Vision or on-device OCR → Open Library lookup.
+        final ocr = await _runFallbackOcr(scanPath);
+        if (ocr.words.isEmpty) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No text detected — try better lighting or hold steadier')),
+          );
+          return;
+        }
+        resultsFuture = BookScanner().scanBooks(
+          ocr.words,
+          gapThreshold: _kGapThreshold,
+          statusSource: const MockLibraryStatusSource(),
         );
-        return;
       }
 
-      final scanner = BookScanner();
-      final resultsFuture = scanner.scanBooks(
-        ocr.words,
-        gapThreshold: _kGapThreshold,
-        statusSource: const MockLibraryStatusSource(),
-      );
+      // Clean up temp files after kicking off the future (not blocking nav).
+      resultsFuture.whenComplete(() {
+        File(imageFile.path).delete().ignore();
+        if (scanPath != imageFile.path) File(scanPath).delete().ignore();
+      });
 
       if (!mounted) return;
       Navigator.push(
@@ -155,6 +156,18 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     } finally {
       if (mounted) setState(() => _isCapturing = false);
     }
+  }
+
+  /// Fallback OCR when no Anthropic key is set (Cloud Vision → on-device ML Kit).
+  Future<OcrResult> _runFallbackOcr(String path) async {
+    if (kCloudVisionApiKey.isNotEmpty) {
+      try {
+        return await CloudVisionOcr(apiKey: kCloudVisionApiKey).recognize(path);
+      } catch (e) {
+        debugPrint('[CameraScreen] Cloud Vision failed, using on-device: $e');
+      }
+    }
+    return OcrService().recognize(path);
   }
 
   @override
