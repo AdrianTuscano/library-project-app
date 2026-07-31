@@ -1,318 +1,338 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'book_scanner.dart';
+import 'design.dart';
 import 'shelf_sort_view.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Design tokens
+// Sort helpers (used by ShelfSortScreen too, so kept here as package utilities)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _bg = Color(0xFF0F1117);
-const _cardBg = Color(0xFF1C1F28);
-const _cardBorder = Color(0xFF272B36);
-const _textPrimary = Colors.white;
-const _textSecondary = Color(0xFF9BA0AB);
-const _textTertiary = Color(0xFF5C6270);
-const _accentBlue = Color(0xFF4E9BFF);
-const _accentAmber = Color(0xFFFF9F0A);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sort helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-enum _SortOrder { shelf, author, dewey }
-
-List<BookResult> _applySort(List<BookResult> books, _SortOrder order) {
-  final copy = List<BookResult>.from(books);
-  switch (order) {
-    case _SortOrder.shelf:
-      copy.sort((a, b) => a.position.compareTo(b.position));
-    case _SortOrder.author:
-      copy.sort((a, b) => _lastName(a.author).compareTo(_lastName(b.author)));
-    case _SortOrder.dewey:
-      copy.sort((a, b) {
-        final da = _deweyValue(a.callNumber);
-        final db = _deweyValue(b.callNumber);
-        if (da == null && db == null) return 0;
-        if (da == null) return 1;
-        if (db == null) return -1;
-        return da.compareTo(db);
-      });
-  }
-  return copy;
-}
-
-String _lastName(String author) {
+String lastName(String author) {
   final parts = author.trim().split(RegExp(r'\s+'));
   return parts.isEmpty ? '' : parts.last.toUpperCase();
 }
 
-double? _deweyValue(String? callNumber) {
+double? deweyValue(String? callNumber) {
   if (callNumber == null) return null;
   final m = RegExp(r'^(\d{3}\.?\d*)').firstMatch(callNumber);
   if (m == null) return null;
   return double.tryParse(m.group(1)!);
 }
 
+bool isNonFiction(BookResult b) => deweyValue(b.callNumber) != null;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen
 // ─────────────────────────────────────────────────────────────────────────────
 
 class BookResultsScreen extends StatefulWidget {
-  /// Changed from Future<List<BookResult>> to Future<ScanResult> so we also
-  /// carry the isOffline flag through to the UI.
   final Future<ScanResult> resultsFuture;
-  final List<ScanWord> words;
-  final double gapThreshold;
-  final int clusterCount;
-  final String rotationUsed;
-
-  const BookResultsScreen({
-    super.key,
-    required this.resultsFuture,
-    required this.words,
-    required this.gapThreshold,
-    required this.clusterCount,
-    required this.rotationUsed,
-  });
+  const BookResultsScreen({super.key, required this.resultsFuture});
 
   @override
   State<BookResultsScreen> createState() => _BookResultsScreenState();
 }
 
-class _BookResultsScreenState extends State<BookResultsScreen> {
-  _SortOrder _sortOrder = _SortOrder.shelf;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'ShelfScan',
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18, letterSpacing: -0.3),
-        ),
-        centerTitle: false,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: _cardBorder),
-        ),
-      ),
-      // SafeArea keeps content clear of the landscape notch; the ConstrainedBox
-      // stops cards from stretching the full width of a wide landscape screen.
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
-            child: FutureBuilder<ScanResult>(
-        future: widget.resultsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return _LoadingView(clusterCount: widget.clusterCount);
-          }
-          if (snapshot.hasError) {
-            return _ErrorView(error: snapshot.error.toString());
-          }
-
-          final scanResult = snapshot.data!;
-          final books = scanResult.books;
-
-          if (books.isEmpty) return const _EmptyView();
-
-          return _ResultsView(
-            books: books, // position (shelf) order
-            isOffline: scanResult.isOffline,
-            sortOrder: _sortOrder,
-            onSortChanged: (s) => setState(() => _sortOrder = s),
-            words: widget.words,
-            gapThreshold: widget.gapThreshold,
-            rotationUsed: widget.rotationUsed,
-          );
-        },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Loading
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _LoadingView extends StatefulWidget {
-  final int clusterCount;
-  const _LoadingView({required this.clusterCount});
-
-  @override
-  State<_LoadingView> createState() => _LoadingViewState();
-}
-
-class _LoadingViewState extends State<_LoadingView>
+class _BookResultsScreenState extends State<BookResultsScreen>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
+  ScanResult? _result;
+  String? _error;
+  int _selected = 0;
+  int _revealed = 0;
+
+  // Fixed placeholder bars shown during processing animation
+  static const _placeholders = [
+    (w: 30.0, h: 152.0, c: Color(0xFF5C5348)),
+    (w: 26.0, h: 170.0, c: Color(0xFF7D5411)),
+    (w: 34.0, h: 160.0, c: Color(0xFF3F4A52)),
+    (w: 28.0, h: 146.0, c: Color(0xFF8C3A2B)),
+    (w: 40.0, h: 176.0, c: Color(0xFF2D2B2B)),
+    (w: 32.0, h: 164.0, c: Color(0xFF6B6350)),
+    (w: 29.0, h: 154.0, c: Color(0xFF9B7232)),
+    (w: 27.0, h: 168.0, c: Color(0xFF4A4740)),
+    (w: 31.0, h: 150.0, c: Color(0xFF7A6A55)),
+    (w: 36.0, h: 172.0, c: Color(0xFF605D5D)),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
+    _startLoading();
   }
 
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
+  void _startLoading() {
+    // Reveal placeholder bars one by one
+    Future.microtask(() async {
+      for (var i = 1; i <= _placeholders.length; i++) {
+        await Future.delayed(const Duration(milliseconds: 160));
+        if (!mounted) return;
+        setState(() => _revealed = i);
+      }
+    });
+
+    widget.resultsFuture.then((result) {
+      if (!mounted) return;
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
+        setState(() => _result = result);
+      });
+    }).catchError((Object e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final n = widget.clusterCount;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+    if (_error != null) return _buildError();
+    if (_result == null) return _buildProcessing();
+    return _buildShelf(_result!.books);
+  }
+
+  // ── Processing ──────────────────────────────────────────────────────────────
+
+  Widget _buildProcessing() {
+    final rev = _revealed;
+    final total = _placeholders.length;
+    final matching = rev >= total;
+
+    return Scaffold(
+      backgroundColor: kBgDark,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: 180,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < total; i++)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.only(right: 6),
+                      width: _placeholders[i].w,
+                      height: _placeholders[i].h,
+                      color: i < rev
+                          ? _placeholders[i].c
+                          : const Color(0xFF26241F),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              matching ? 'Matching records' : 'Reading spines',
+              style: kHeading(24, color: const Color(0xFFEFE9E0)),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${rev.clamp(0, total)} of $total spines · titles and authors from the catalogue',
+              style: kLabel(12, color: const Color(0xFF8D857A)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Shelf ───────────────────────────────────────────────────────────────────
+
+  Widget _buildShelf(List<BookResult> books) {
+    if (books.isEmpty) {
+      return Scaffold(
+        backgroundColor: kBgScreen,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('No books found', style: kHeading(24)),
+              const SizedBox(height: 10),
+              Text('Try scanning again with better lighting',
+                  style: kBody(14, color: kTextMut)),
+              const SizedBox(height: 24),
+              _GoldOutlineButton(
+                  label: 'Back', onTap: () => Navigator.pop(context)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final sel = books[_selected.clamp(0, books.length - 1)];
+
+    return Scaffold(
+      backgroundColor: kBgScreen,
+      body: Column(
         children: [
-          SizedBox(
-            width: 52,
-            height: 52,
-            child: CircularProgressIndicator(
-              strokeWidth: 3,
-              color: _accentBlue,
-              backgroundColor: _cardBorder,
+          _buildNavBar(books),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: _buildSpineArea(books)),
+                Container(
+                  width: 292,
+                  decoration: const BoxDecoration(
+                    color: kBgPanel,
+                    border: Border(left: BorderSide(color: kDivider)),
+                  ),
+                  child: _buildDetailPanel(sel),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 24),
-          AnimatedBuilder(
-            animation: _pulse,
-            builder: (_, __) => Opacity(
-              opacity: 0.55 + 0.45 * _pulse.value,
-              child: Text(
-                n > 0
-                    ? 'Looking up $n book${n == 1 ? "" : "s"}…'
-                    : 'Searching Open Library…',
-                style: const TextStyle(
-                  color: _textPrimary,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavBar(List<BookResult> books) {
+    return Container(
+      height: 48,
+      decoration: const BoxDecoration(
+        color: kBgScreen,
+        border: Border(bottom: BorderSide(color: kDivider)),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+              child: Text('←', style: kBody(16, color: kTextMut)),
+            ),
+          ),
+          Text('Scanned shelf', style: kHeading(19)),
+          const Spacer(),
+          Text('${books.length} spines recognised',
+              style: kLabel(11, color: kTextFaint)),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ShelfSortScreen(books: books),
+              ),
+            ),
+            child: Container(
+              margin: const EdgeInsets.only(right: 18),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+              decoration: BoxDecoration(
+                border: Border.all(color: kGold),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text('Check sorting',
+                  style: kLabel(12, color: kGoldText)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpineArea(List<BookResult> books) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 0, 0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < books.length; i++)
+                    _SpineBar(
+                      book: books[i],
+                      selected: i == _selected,
+                      onTap: () => setState(() => _selected = i),
+                    ),
+                  const SizedBox(width: 20),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Running parallel lookups',
-            style: TextStyle(color: _textSecondary, fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Empty
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _EmptyView extends StatelessWidget {
-  const _EmptyView();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 40),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.menu_book_rounded, size: 64, color: _textTertiary),
-            const SizedBox(height: 20),
-            const Text(
-              'No books detected',
-              style: TextStyle(
-                color: _textPrimary, fontSize: 20, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 16),
-            ...[
-              (Icons.wb_sunny_outlined, 'Good, even lighting on the spines'),
-              (Icons.do_not_touch_outlined, 'Hold the camera steady while capturing'),
-              (Icons.crop_rotate, 'Spines should face the camera directly'),
-              (Icons.view_column_outlined, 'Fill the frame with the row of spines'),
-            ].map((t) => _TipRow(icon: t.$1, tip: t.$2)),
-          ],
         ),
-      ),
+        // Shelf line
+        Container(
+          height: 6,
+          margin: const EdgeInsets.only(right: 0),
+          color: const Color(0xFFD7D3CF),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 7, 20, 10),
+          child: Text('Tap a spine to see the full record.',
+              style: kBody(11, color: kTextFaint, style: FontStyle.italic)),
+        ),
+      ],
     );
   }
-}
 
-class _TipRow extends StatelessWidget {
-  final IconData icon;
-  final String tip;
-  const _TipRow({required this.icon, required this.tip});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildDetailPanel(BookResult b) {
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Row(
+      padding: const EdgeInsets.all(18),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: _accentBlue),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(tip,
-                style: const TextStyle(color: _textSecondary, fontSize: 14)),
+          Text(
+            'POSITION ${b.position}',
+            style: kLabel(10, color: kTextFaint, tracking: 0.16),
+          ),
+          const SizedBox(height: 9),
+          Text(b.title, style: kHeading(25)),
+          const SizedBox(height: 13),
+          const Divider(color: kDivider, height: 1),
+          const SizedBox(height: 13),
+          _DetailField(label: 'AUTHOR', value: b.author),
+          if (b.callNumber != null) ...[
+            const SizedBox(height: 9),
+            _DetailField(label: 'CALL NUMBER', value: b.callNumber!),
+          ],
+          if (b.firstPublishYear != null) ...[
+            const SizedBox(height: 9),
+            _DetailField(label: 'PUBLISHED', value: b.firstPublishYear!),
+          ],
+          const SizedBox(height: 9),
+          _DetailField(
+              label: 'MATCH',
+              value: b.confidence == 'high' ? 'High confidence' : 'Possible match'),
+          const Spacer(),
+          GestureDetector(
+            onTap: () {},
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              decoration: BoxDecoration(
+                border: Border.all(color: kDivider),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text('Edit record',
+                  textAlign: TextAlign.center,
+                  style: kLabel(13, color: kTextMut)),
+            ),
           ),
         ],
       ),
     );
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Error
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _ErrorView extends StatelessWidget {
-  final String error;
-  const _ErrorView({required this.error});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 40),
+  Widget _buildError() {
+    return Scaffold(
+      backgroundColor: kBgScreen,
+      body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded,
-                size: 48, color: Color(0xFFFF453A)),
-            const SizedBox(height: 16),
-            const Text(
-              'Something went wrong',
-              style: TextStyle(
-                  color: _textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700),
-            ),
+            Text('Scan error', style: kHeading(24)),
             const SizedBox(height: 8),
-            Text(error,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _textSecondary, fontSize: 13)),
+            Text(_error!, style: kBody(13, color: kTextMut)),
             const SizedBox(height: 24),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Go back',
-                  style: TextStyle(color: _accentBlue)),
-            ),
+            _GoldOutlineButton(label: 'Back', onTap: () => Navigator.pop(context)),
           ],
         ),
       ),
@@ -321,299 +341,104 @@ class _ErrorView extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Results list
+// Spine bar — a single book spine in the shelf visualization
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ResultsView extends StatelessWidget {
-  final List<BookResult> books;
-  final bool isOffline;
-  final _SortOrder sortOrder;
-  final ValueChanged<_SortOrder> onSortChanged;
-  final List<ScanWord> words;
-  final double gapThreshold;
-  final String rotationUsed;
+class _SpineBar extends StatelessWidget {
+  final BookResult book;
+  final bool selected;
+  final VoidCallback onTap;
 
-  const _ResultsView({
-    required this.books,
-    required this.isOffline,
-    required this.sortOrder,
-    required this.onSortChanged,
-    required this.words,
-    required this.gapThreshold,
-    required this.rotationUsed,
+  const _SpineBar({
+    required this.book,
+    required this.selected,
+    required this.onTap,
   });
+
+  int get _w {
+    final hash = book.title.codeUnits.fold(0, (a, c) => a ^ c);
+    return 22 + (hash.abs() % 22);
+  }
+
+  int get _h {
+    final hash = (book.author + book.title).codeUnits.fold(0, (a, c) => a ^ c);
+    return 130 + (hash.abs() % 70);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final hasCached =
-        books.any((b) => b.source == ResultSource.cache);
-    final hasUnavailable =
-        books.any((b) => b.source == ResultSource.unavailable);
-
-    // Current = shelf (position) order; target = the chosen sort.
-    final sortedOrder = _applySort(books, sortOrder);
-    final targetLabel = switch (sortOrder) {
-      _SortOrder.shelf => 'shelf position',
-      _SortOrder.author => 'author',
-      _SortOrder.dewey => 'call number',
-    };
-
-    return CustomScrollView(
-      slivers: [
-        // ── Offline / cache banners ──────────────────────────────────────────
-        if (isOffline || hasUnavailable || hasCached)
-          SliverToBoxAdapter(
-            child: _StatusBanner(
-              isOffline: isOffline || hasUnavailable,
-              hasCached: hasCached,
-            ),
-          ),
-
-        // ── Sort controls ────────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: _SortBar(current: sortOrder, onChanged: onSortChanged),
+    final color = spineColor(book.position);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: _w.toDouble(),
+        height: _h.toDouble(),
+        margin: const EdgeInsets.only(right: 7),
+        decoration: BoxDecoration(
+          color: color,
+          border: selected
+              ? Border.all(color: kGold, width: 1.5)
+              : null,
         ),
-
-        // ── Shelf sort diagram ───────────────────────────────────────────────
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(0, 8, 0, 24),
-          sliver: SliverToBoxAdapter(
-            child: ShelfSortView(
-              currentOrder: books,
-              sortedOrder: sortedOrder,
-              targetLabel: targetLabel,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Center(
+          child: RotatedBox(
+            quarterTurns: 3,
+            child: Text(
+              '${book.position}  ${book.title}',
+              style: GoogleFonts.lora(
+                fontSize: 10,
+                color: const Color(0xFFF1ECE4),
+                letterSpacing: 0.05,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
+      ),
+    );
+  }
+}
 
-        // ── Debug disclosure ─────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: _DebugDisclosure(
-              words: words,
-              gapThreshold: gapThreshold,
-              rotationUsed: rotationUsed),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared UI fragments
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DetailField extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailField({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: kLabel(10, color: kTextFaint, tracking: 0.14)),
+        const SizedBox(height: 2),
+        Text(value, style: kBody(13.5)),
       ],
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Status banner (offline / cached)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _StatusBanner extends StatelessWidget {
-  final bool isOffline;
-  final bool hasCached;
-  const _StatusBanner({required this.isOffline, required this.hasCached});
+class _GoldOutlineButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _GoldOutlineButton({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final String message;
-    final Color color;
-    final IconData icon;
-
-    if (isOffline) {
-      message = hasCached
-          ? 'No network — some results are from cache'
-          : 'No network — lookup unavailable. Results show detected text.';
-      color = _accentAmber;
-      icon = Icons.wifi_off_rounded;
-    } else {
-      message = 'Some results served from cache';
-      color = _accentBlue;
-      icon = Icons.bolt_rounded;
-    }
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sort bar
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _SortBar extends StatelessWidget {
-  final _SortOrder current;
-  final ValueChanged<_SortOrder> onChanged;
-  const _SortBar({required this.current, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
-        children: [
-          Text('Sort by',
-              style: TextStyle(
-                  color: _textTertiary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: SegmentedButton<_SortOrder>(
-              selected: {current},
-              onSelectionChanged: (s) => onChanged(s.first),
-              showSelectedIcon: false,
-              style: ButtonStyle(
-                backgroundColor: WidgetStateProperty.resolveWith((s) =>
-                    s.contains(WidgetState.selected)
-                        ? _accentBlue.withOpacity(0.18)
-                        : _cardBg),
-                foregroundColor: WidgetStateProperty.resolveWith((s) =>
-                    s.contains(WidgetState.selected) ? _accentBlue : _textSecondary),
-                side: WidgetStateProperty.all(
-                    const BorderSide(color: _cardBorder)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-              segments: const [
-                ButtonSegment(value: _SortOrder.shelf, label: Text('Shelf')),
-                ButtonSegment(value: _SortOrder.author, label: Text('Author')),
-                ButtonSegment(value: _SortOrder.dewey, label: Text('Dewey')),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Debug disclosure (collapsed by default)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _DebugDisclosure extends StatefulWidget {
-  final List<ScanWord> words;
-  final double gapThreshold;
-  final String rotationUsed;
-  const _DebugDisclosure({
-    required this.words,
-    required this.gapThreshold,
-    required this.rotationUsed,
-  });
-
-  @override
-  State<_DebugDisclosure> createState() => _DebugDisclosureState();
-}
-
-class _DebugDisclosureState extends State<_DebugDisclosure> {
-  bool _expanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final scanner = BookScanner();
-    final clusters =
-        scanner.clusterByGap(widget.words, gapThreshold: widget.gapThreshold);
-    final totalWords = widget.words.length;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          GestureDetector(
-            onTap: () => setState(() => _expanded = !_expanded),
-            behavior: HitTestBehavior.opaque,
-            child: Row(
-              children: [
-                Text(
-                  'Debug — ${clusters.length} clusters · $totalWords words · gap ${widget.gapThreshold.toStringAsFixed(0)} px · OCR ${widget.rotationUsed}',
-                  style: const TextStyle(color: _textTertiary, fontSize: 11),
-                ),
-                const Spacer(),
-                Icon(
-                  _expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 16,
-                  color: _textTertiary,
-                ),
-              ],
-            ),
-          ),
-          if (_expanded) ...[
-            const SizedBox(height: 10),
-            ...clusters.asMap().entries.map(
-                (e) => _ClusterDebugCard(index: e.key, cluster: e.value)),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ClusterDebugCard extends StatelessWidget {
-  final int index;
-  final List<ScanWord> cluster;
-  const _ClusterDebugCard({required this.index, required this.cluster});
-
-  @override
-  Widget build(BuildContext context) {
-    final minX =
-        cluster.map((w) => w.centerX).reduce((a, b) => a < b ? a : b);
-    final maxX =
-        cluster.map((w) => w.centerX).reduce((a, b) => a > b ? a : b);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Cluster ${index + 1}  ·  x ${minX.toStringAsFixed(0)}–${maxX.toStringAsFixed(0)}',
-            style: const TextStyle(
-                color: _textTertiary, fontSize: 10, fontFamily: 'monospace'),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 5,
-            runSpacing: 4,
-            children: cluster.map((w) {
-              return Tooltip(
-                message: 'x=${w.centerX.toStringAsFixed(0)}',
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: _cardBorder),
-                  ),
-                  child: Text(w.text,
-                      style:
-                          const TextStyle(color: _textSecondary, fontSize: 11)),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+        decoration: BoxDecoration(
+          border: Border.all(color: kGold),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text(label, style: kLabel(13, color: kGoldText)),
       ),
     );
   }

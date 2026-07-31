@@ -1,156 +1,267 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'book_results_screen.dart' show lastName, isNonFiction;
 import 'book_scanner.dart';
+import 'design.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ShelfSortView — visual "where each book goes to get sorted"
-//
-// Top row  = the shelf as scanned (left → right = physical order).
-// Bottom row = the same books in the target sorted order.
-// Connectors link each book from its current slot to its destination slot.
-// Each book keeps ONE colour across both rows so it's traceable by eye.
-// Tapping a spine opens its details.
+// Sort computation
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _cardBg = Color(0xFF1C1F28);
-const _cardBorder = Color(0xFF272B36);
-const _textSecondary = Color(0xFF9BA0AB);
-const _textTertiary = Color(0xFF5C6270);
-const _accentGreen = Color(0xFF30D158);
-const _accentRed = Color(0xFFFF453A);
+class _SortItem {
+  final BookResult book;
+  final int currentSlot;  // 1-indexed position in scanned order
+  final int? targetSlot;  // 1-indexed, null = remove (non-fiction)
 
-// Distinct, readable spine colours; assigned by scan position so a book looks
-// the same in both rows.
-const _spinePalette = <Color>[
-  Color(0xFF4E9BFF), Color(0xFFFF9F0A), Color(0xFF30D158), Color(0xFFBF5AF2),
-  Color(0xFFFF6482), Color(0xFF64D2FF), Color(0xFFFFD60A), Color(0xFF5E5CE6),
-  Color(0xFFFF7A45), Color(0xFF2CC0A0),
-];
-Color _spineColor(int position) => _spinePalette[(position - 1) % _spinePalette.length];
+  const _SortItem(this.book, this.currentSlot, this.targetSlot);
 
-// Spine + layout geometry.
-const double _spineW = 48;
-const double _spineH = 128;
-const double _gap = 14;
-const double _rowLabelH = 26;
-const double _arrowGap = 76; // vertical space between the two rows for connectors
-const double _sidePad = 20;
+  bool get isNF => targetSlot == null;
+  bool get inPlace => targetSlot == currentSlot;
+  bool get needsFix => isNF || !inPlace;
+}
 
-class ShelfSortView extends StatelessWidget {
-  /// Books in physical (scan) order — position 1..n, left → right.
-  final List<BookResult> currentOrder;
+List<_SortItem> _computeSort(List<BookResult> books) {
+  final fiction = books.where((b) => !isNonFiction(b)).toList()
+    ..sort((a, b) => lastName(a.author).compareTo(lastName(b.author)));
 
-  /// The same books in the chosen sorted order.
-  final List<BookResult> sortedOrder;
+  final Map<int, int> targetByPos = {};
+  for (var i = 0; i < fiction.length; i++) {
+    targetByPos[fiction[i].position] = i + 1;
+  }
 
-  /// e.g. "author" / "call number" — shown on the lower row label.
-  final String targetLabel;
-
-  const ShelfSortView({
-    super.key,
-    required this.currentOrder,
-    required this.sortedOrder,
-    required this.targetLabel,
+  return List.generate(books.length, (i) {
+    final b = books[i];
+    return _SortItem(b, i + 1, isNonFiction(b) ? null : targetByPos[b.position]);
   });
+}
+
+// Spine dimensions — deterministic from title/author
+int _spineW(BookResult b) {
+  final hash = b.title.codeUnits.fold(0, (a, c) => a ^ c);
+  return 22 + (hash.abs() % 22);
+}
+
+int _spineH(BookResult b) {
+  final hash = (b.author + b.title).codeUnits.fold(0, (a, c) => a ^ c);
+  return 110 + (hash.abs() % 60);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ShelfSortScreen extends StatefulWidget {
+  final List<BookResult> books;
+  const ShelfSortScreen({super.key, required this.books});
+
+  @override
+  State<ShelfSortScreen> createState() => _ShelfSortScreenState();
+}
+
+class _ShelfSortScreenState extends State<ShelfSortScreen> {
+  late final List<_SortItem> _items;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = _computeSort(widget.books);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final n = currentOrder.length;
-    if (n == 0) return const SizedBox.shrink();
+    final fixes = _items.where((it) => it.needsFix).toList();
 
-    final returns = currentOrder
-        .where((b) => b.availability == LibraryAvailability.checkedOut)
-        .toList();
-
-    // Destination slot for each current index, matched by unique position.
-    final targetIndexByPos = <int, int>{
-      for (var j = 0; j < sortedOrder.length; j++) sortedOrder[j].position: j,
-    };
-
-    final contentW = _sidePad * 2 + n * _spineW + (n - 1) * _gap;
-    final topRowTop = _rowLabelH;
-    final bottomRowTop = topRowTop + _spineH + _arrowGap;
-    final contentH = bottomRowTop + _spineH + _rowLabelH;
-
-    double centerX(int index) =>
-        _sidePad + index * (_spineW + _gap) + _spineW / 2;
-
-    // Build connector links (current slot bottom → target slot top).
-    final links = <_Link>[];
-    for (var i = 0; i < n; i++) {
-      final book = currentOrder[i];
-      final j = targetIndexByPos[book.position] ?? i;
-      final isReturn = book.availability == LibraryAvailability.checkedOut;
-      links.add(_Link(
-        x1: centerX(i),
-        y1: topRowTop + _spineH,
-        x2: centerX(j),
-        y2: bottomRowTop,
-        color: isReturn ? _accentRed : _spineColor(book.position),
-        inPlace: i == j && !isReturn,
-      ));
-    }
-
-    final diagram = SizedBox(
-      width: math.max(contentW, MediaQuery.of(context).size.width),
-      height: contentH,
-      child: Stack(
+    return Scaffold(
+      backgroundColor: kBgScreen,
+      body: Column(
         children: [
-          // Connector layer (behind the spines).
-          Positioned.fill(
-            child: CustomPaint(painter: _ConnectorPainter(links)),
-          ),
-
-          // Row labels.
-          Positioned(
-            top: 0,
-            left: _sidePad,
-            child: _RowLabel('ON THE SHELF NOW'),
-          ),
-          Positioned(
-            top: bottomRowTop + _spineH + 4,
-            left: _sidePad,
-            child: _RowLabel('SORTED BY ${targetLabel.toUpperCase()}'),
-          ),
-
-          // Top row — current order.
-          for (var i = 0; i < n; i++)
-            Positioned(
-              top: topRowTop,
-              left: centerX(i) - _spineW / 2,
-              child: _Spine(
-                book: currentOrder[i],
-                color: _spineColor(currentOrder[i].position),
-              ),
+          _buildNavBar(fixes.length),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: _buildVisualization()),
+                Container(
+                  width: 292,
+                  decoration: const BoxDecoration(
+                    color: kBgPanel,
+                    border: Border(left: BorderSide(color: kDivider)),
+                  ),
+                  child: _buildActionPanel(fixes),
+                ),
+              ],
             ),
-
-          // Bottom row — sorted order.
-          for (var j = 0; j < n; j++)
-            Positioned(
-              top: bottomRowTop,
-              left: centerX(j) - _spineW / 2,
-              child: _Spine(
-                book: sortedOrder[j],
-                color: _spineColor(sortedOrder[j].position),
-              ),
-            ),
+          ),
         ],
       ),
     );
+  }
 
+  Widget _buildNavBar(int fixCount) {
+    return Container(
+      height: 48,
+      decoration: const BoxDecoration(
+        color: kBgScreen,
+        border: Border(bottom: BorderSide(color: kDivider)),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+              child: Text('←', style: kBody(16, color: kTextMut)),
+            ),
+          ),
+          Text('Sorting check', style: kHeading(19)),
+          const SizedBox(width: 14),
+          Text('Author surname A–Z · Dewey for non-fiction',
+              style: kLabel(11, color: kTextFaint)),
+          const Spacer(),
+          Padding(
+            padding: const EdgeInsets.only(right: 18),
+            child: Text(
+              '$fixCount of ${widget.books.length} out of place',
+              style: kLabel(11,
+                  color: fixCount > 0 ? kRust : const Color(0xFF3A6B3A)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisualization() {
+    if (_items.isEmpty) return const SizedBox.shrink();
+
+    // Compute spine layout
+    final widths = _items.map((it) => _spineW(it.book).toDouble()).toList();
+    const gap = 7.0;
+    const arcZoneH = 88.0;
+    const badgeH = 22.0;
+    final maxSpineH = _items
+        .map((it) => _spineH(it.book).toDouble())
+        .fold(0.0, math.max);
+    const shelfLineH = 6.0;
+    const bottomPad = 10.0;
+
+    final totalH = arcZoneH + badgeH + maxSpineH + shelfLineH + bottomPad;
+
+    // x positions (left edge of each spine)
+    final xs = <double>[];
+    double cx = 0;
+    for (final w in widths) {
+      xs.add(cx);
+      cx += w + gap;
+    }
+    final totalW = cx - gap + 20;
+
+    // center x of each spine
+    double centerX(int i) => xs[i] + widths[i] / 2;
+    // top y of each spine (relative to start of canvas which is at arcZoneH + badgeH)
+    double spineTopY(int i) =>
+        arcZoneH + badgeH + (maxSpineH - _spineH(_items[i].book));
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(left: 20),
+          child: SizedBox(
+            width: math.max(totalW, constraints.maxWidth - 20),
+            height: totalH,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Arc layer
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _ArcPainter(
+                      items: _items,
+                      centerXs: List.generate(_items.length, centerX),
+                      spineTopYs: List.generate(_items.length, spineTopY),
+                    ),
+                  ),
+                ),
+
+                // Badges
+                for (var i = 0; i < _items.length; i++)
+                  if (_items[i].needsFix)
+                    Positioned(
+                      top: arcZoneH,
+                      left: xs[i],
+                      width: widths[i],
+                      child: _Badge(item: _items[i]),
+                    ),
+
+                // Spine bars
+                for (var i = 0; i < _items.length; i++)
+                  Positioned(
+                    top: spineTopY(i),
+                    left: xs[i],
+                    child: _SortSpine(item: _items[i]),
+                  ),
+
+                // Shelf line
+                Positioned(
+                  top: arcZoneH + badgeH + maxSpineH,
+                  left: 0,
+                  width: math.max(totalW, constraints.maxWidth),
+                  child: Container(
+                    height: shelfLineH,
+                    color: const Color(0xFFD7D3CF),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildActionPanel(List<_SortItem> fixes) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (returns.isNotEmpty) _ReturnBanner(books: returns),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: diagram,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+          child: Text('TO FIX', style: kLabel(10, tracking: 0.18)),
         ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
-          child: Text(
-            'Tap a spine for details · green line = already in place · red = Book Return',
-            style: TextStyle(color: _textTertiary, fontSize: 11),
+        const Divider(color: kDivider, height: 1),
+        Expanded(
+          child: fixes.isEmpty
+              ? Center(
+                  child: Text('All in order',
+                      style: kBody(13, color: kTextFaint,
+                          style: FontStyle.italic)),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: fixes.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: kDivider, height: 1),
+                  itemBuilder: (_, i) => _ActionItem(item: fixes[i]),
+                ),
+        ),
+        const Divider(color: kDivider, height: 1),
+        Padding(
+          padding: const EdgeInsets.all(14),
+          child: GestureDetector(
+            onTap: () =>
+                Navigator.popUntil(context, (r) => r.isFirst),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              decoration: BoxDecoration(
+                border: Border.all(color: kGold),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text('Rescan shelf',
+                  textAlign: TextAlign.center,
+                  style: kLabel(13, color: kGoldText)),
+            ),
           ),
         ),
       ],
@@ -158,283 +269,205 @@ class ShelfSortView extends StatelessWidget {
   }
 }
 
-// Red warning: these books are checked out in the ILS — they were reshelved by
-// mistake and must go to the Book Return, not be sorted onto the shelf.
-class _ReturnBanner extends StatelessWidget {
-  final List<BookResult> books;
-  const _ReturnBanner({required this.books});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: _accentRed.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _accentRed.withValues(alpha: 0.45)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.warning_amber_rounded, size: 18, color: _accentRed),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '${books.length} book${books.length == 1 ? "" : "s"} to the Book Return — do NOT shelve',
-                  style: const TextStyle(
-                      color: _accentRed,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Still checked out in the catalog — send to the return bin to be checked in and re-scanned.',
-            style: TextStyle(
-                color: _accentRed.withValues(alpha: 0.9), fontSize: 11),
-          ),
-          const SizedBox(height: 8),
-          ...books.map((b) => Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text('#${b.position}  ${b.title}',
-                    style: const TextStyle(color: Colors.white, fontSize: 12)),
-              )),
-        ],
-      ),
-    );
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Spine
+// Arc painter — draws arrows above spines for misplaced books
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _Spine extends StatelessWidget {
-  final BookResult book;
-  final Color color;
-  const _Spine({required this.book, required this.color});
+class _ArcPainter extends CustomPainter {
+  final List<_SortItem> items;
+  final List<double> centerXs;
+  final List<double> spineTopYs;
 
-  @override
-  Widget build(BuildContext context) {
-    // Checked-out books override the palette colour with a red "return" state.
-    final isReturn = book.availability == LibraryAvailability.checkedOut;
-    final spineColor = isReturn ? _accentRed : color;
-
-    return GestureDetector(
-      onTap: () => _showDetails(context, book),
-      child: Container(
-        width: _spineW,
-        height: _spineH,
-        decoration: BoxDecoration(
-          color: spineColor.withValues(alpha: isReturn ? 0.28 : 0.18),
-          borderRadius: BorderRadius.circular(6),
-          border: Border(left: BorderSide(color: spineColor, width: 4)),
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
-        child: Column(
-          children: [
-            // Position badge, or a return icon when checked out.
-            Container(
-              width: 18,
-              height: 18,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: spineColor, shape: BoxShape.circle),
-              child: isReturn
-                  ? const Icon(Icons.assignment_return, size: 11, color: Colors.white)
-                  : Text('${book.position}',
-                      style: const TextStyle(
-                          color: Colors.black,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800)),
-            ),
-            const SizedBox(height: 4),
-            // Vertical title, like a real spine.
-            Expanded(
-              child: RotatedBox(
-                quarterTurns: 1,
-                child: Center(
-                  child: Text(
-                    book.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-void _showDetails(BuildContext context, BookResult book) {
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: _cardBg,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (_) => Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 4,
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: _cardBorder,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Text(book.title,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700)),
-          if (book.author.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(book.author,
-                style: const TextStyle(color: _textSecondary, fontSize: 14)),
-          ],
-          const SizedBox(height: 12),
-          if (book.availability == LibraryAvailability.checkedOut) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: _accentRed.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: _accentRed.withValues(alpha: 0.45)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.assignment_return, size: 16, color: _accentRed),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Checked out — send to Book Return, don\'t shelve',
-                      style: TextStyle(
-                          color: _accentRed,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              _chip('Shelf position ${book.position}'),
-              if (book.firstPublishYear != null) _chip(book.firstPublishYear!),
-              if (book.callNumber != null) _chip(book.callNumber!),
-              _chip(book.confidence == 'high' ? 'High match' : 'Possible match'),
-            ],
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-Widget _chip(String label) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-      ),
-      child: Text(label,
-          style: const TextStyle(color: _textSecondary, fontSize: 12)),
-    );
-
-class _RowLabel extends StatelessWidget {
-  final String text;
-  const _RowLabel(this.text);
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: const TextStyle(
-          color: _textTertiary,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1,
-        ),
-      );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Connector painter
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _Link {
-  final double x1, y1, x2, y2;
-  final Color color;
-  final bool inPlace;
-  const _Link({
-    required this.x1,
-    required this.y1,
-    required this.x2,
-    required this.y2,
-    required this.color,
-    required this.inPlace,
+  const _ArcPainter({
+    required this.items,
+    required this.centerXs,
+    required this.spineTopYs,
   });
-}
-
-class _ConnectorPainter extends CustomPainter {
-  final List<_Link> links;
-  _ConnectorPainter(this.links);
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final link in links) {
-      final color = link.inPlace ? _accentGreen : link.color;
-      final paint = Paint()
-        ..color = color.withValues(alpha: link.inPlace ? 0.55 : 0.85)
-        ..strokeWidth = 2.5
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      if (!item.needsFix) continue;
 
-      // Smooth S-curve between the two slots.
-      final start = Offset(link.x1, link.y1);
-      final end = Offset(link.x2, link.y2);
-      final midY = (link.y1 + link.y2) / 2;
-      final path = Path()
-        ..moveTo(start.dx, start.dy)
-        ..cubicTo(start.dx, midY, end.dx, midY, end.dx, end.dy);
-      canvas.drawPath(path, paint);
+      final x1 = centerXs[i];
+      final y1 = spineTopYs[i]; // top of current spine
 
-      // Arrowhead at the destination, pointing down.
-      const barb = 9.0;
-      final fill = Paint()
-        ..color = color.withValues(alpha: link.inPlace ? 0.55 : 0.9)
-        ..style = PaintingStyle.fill;
-      final head = Path()
-        ..moveTo(end.dx, end.dy + 2)
-        ..lineTo(end.dx - barb * 0.6, end.dy - barb)
-        ..lineTo(end.dx + barb * 0.6, end.dy - barb)
-        ..close();
-      canvas.drawPath(head, fill);
+      if (item.isNF) {
+        _drawSectionArrow(canvas, x1, y1);
+      } else {
+        final j = item.targetSlot! - 1; // 0-indexed
+        if (j < 0 || j >= centerXs.length) continue;
+        _drawArc(canvas, x1, y1, centerXs[j], spineTopYs[j]);
+      }
     }
   }
 
+  void _drawSectionArrow(Canvas canvas, double cx, double spineTop) {
+    final strokePaint = Paint()
+      ..color = kRust
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final y1 = spineTop;
+    final y2 = spineTop - 56;
+
+    canvas.drawLine(Offset(cx, y1), Offset(cx, y2), strokePaint);
+
+    final fillPaint = Paint()
+      ..color = kRust
+      ..style = PaintingStyle.fill;
+    final head = Path()
+      ..moveTo(cx, y2 - 5)
+      ..lineTo(cx - 5, y2 + 6)
+      ..lineTo(cx + 5, y2 + 6)
+      ..close();
+    canvas.drawPath(head, fillPaint);
+  }
+
+  void _drawArc(Canvas canvas, double x1, double y1, double x2, double y2) {
+    final paint = Paint()
+      ..color = kGold
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final dist = (x2 - x1).abs();
+    final lift = math.min(40 + dist * 0.09, 78.0);
+
+    final path = Path()
+      ..moveTo(x1, y1)
+      ..cubicTo(x1, y1 - lift, x2, y2 - lift, x2, y2);
+    canvas.drawPath(path, paint);
+
+    // Arrowhead at destination pointing down
+    final fillPaint = Paint()
+      ..color = kGold
+      ..style = PaintingStyle.fill;
+    final head = Path()
+      ..moveTo(x2, y2 + 5)
+      ..lineTo(x2 - 5, y2 - 6)
+      ..lineTo(x2 + 5, y2 - 6)
+      ..close();
+    canvas.drawPath(head, fillPaint);
+  }
+
   @override
-  bool shouldRepaint(covariant _ConnectorPainter old) => old.links != links;
+  bool shouldRepaint(covariant _ArcPainter old) => false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spine + badge widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SortSpine extends StatelessWidget {
+  final _SortItem item;
+  const _SortSpine({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = spineColor(item.book.position);
+    final borderColor = item.isNF ? kRust : (item.inPlace ? null : kGold);
+
+    return Container(
+      width: _spineW(item.book).toDouble(),
+      height: _spineH(item.book).toDouble(),
+      decoration: BoxDecoration(
+        color: color,
+        border: borderColor != null
+            ? Border.all(color: borderColor, width: 1.5)
+            : null,
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: RotatedBox(
+          quarterTurns: 3,
+          child: Text(
+            '${item.currentSlot}  ${item.book.title}',
+            style: GoogleFonts.lora(
+              fontSize: 10,
+              color: const Color(0xFFF1ECE4),
+              letterSpacing: 0.05,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final _SortItem item;
+  const _Badge({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = item.isNF ? kRust : kGold;
+    final text = item.isNF
+        ? 'NON-FICTION'
+        : '→ ${item.targetSlot}';
+
+    return Container(
+      height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color),
+      child: Text(
+        text,
+        style: GoogleFonts.lora(
+          fontSize: 8,
+          color: Colors.white,
+          letterSpacing: 0.1,
+          fontWeight: FontWeight.w500,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.clip,
+      ),
+    );
+  }
+}
+
+class _ActionItem extends StatelessWidget {
+  final _SortItem item;
+  const _ActionItem({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = item.isNF ? kRust : kGold;
+    final meta = item.isNF
+        ? 'Non-fiction — reshelve in Dewey section'
+        : 'Move from position ${item.currentSlot} → ${item.targetSlot}';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 3,
+            height: 36,
+            margin: const EdgeInsets.only(right: 10, top: 2),
+            color: color,
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.book.title,
+                  style: kBody(12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(meta, style: kLabel(10, color: kTextMut)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

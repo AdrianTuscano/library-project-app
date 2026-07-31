@@ -6,13 +6,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'book_results_screen.dart';
 import 'book_scanner.dart';
 import 'cloud_vision_ocr.dart';
+import 'design.dart';
 import 'ocr_config.dart';
 import 'ocr_service.dart';
 import 'main.dart';
 
-// Gap threshold in pixels at the captured image resolution.
-// 20px matched the Pi webcam at 720p. Phone cameras at veryHigh (~1920px wide)
-// need ~100–150px. Raise if spines are merging; lower if one spine splits.
 const double _kGapThreshold = 100;
 
 class CameraScreen extends StatefulWidget {
@@ -33,7 +31,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         (event.logicalKey == LogicalKeyboardKey.audioVolumeUp ||
          event.logicalKey == LogicalKeyboardKey.audioVolumeDown)) {
       _capture();
-      return true; // consume — prevents volume HUD from showing
+      return true;
     }
     return false;
   }
@@ -54,30 +52,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     super.dispose();
   }
 
-  // Re-check permission when the user returns from Settings.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        _permState == _PermState.denied) {
+    if (state == AppLifecycleState.resumed && _permState == _PermState.denied) {
       _checkPermission();
     }
   }
 
   Future<void> _checkPermission() async {
     final status = await Permission.camera.status;
-
     if (status.isGranted) {
       setState(() => _permState = _PermState.granted);
       await _initCamera();
       return;
     }
-
     if (status.isPermanentlyDenied) {
       setState(() => _permState = _PermState.denied);
       return;
     }
-
-    // First-time or "ask again" — show system prompt.
     final result = await Permission.camera.request();
     if (result.isGranted) {
       setState(() => _permState = _PermState.granted);
@@ -100,8 +92,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     setState(() {});
   }
 
-  // Cloud Vision when a key is configured; on-device multi-orientation OCR
-  // otherwise, or if the cloud call fails (e.g. offline).
   Future<OcrResult> _runOcr(String path) async {
     if (kCloudVisionApiKey.isNotEmpty) {
       try {
@@ -117,7 +107,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized || _isCapturing) return;
 
-    // Capture the visible crop up front (needs context, no awaits before it).
     final frac = visibleCropFractions(
       screenAspect: MediaQuery.of(context).size.aspectRatio,
       previewAspect: controller.value.aspectRatio,
@@ -129,43 +118,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final XFile imageFile = await controller.takePicture();
       await controller.setFlashMode(FlashMode.off);
 
-      // Crop the still to exactly what the full-bleed preview showed, so we only
-      // scan what was on screen (the preview covers the screen and crops the
-      // overflow; mirror that crop here).
-      final scanPath =
-          await cropToVisibleRegion(imageFile.path, frac.w, frac.h);
-
-      // OCR: prefer Cloud Vision, fall back to on-device (see _runOcr). Words
-      // come back with centers on the original frame's X axis either way.
+      final scanPath = await cropToVisibleRegion(imageFile.path, frac.w, frac.h);
       final ocr = await _runOcr(scanPath);
       await File(imageFile.path).delete();
-      if (scanPath != imageFile.path) {
-        await File(scanPath).delete();
-      }
+      if (scanPath != imageFile.path) await File(scanPath).delete();
 
-      // No text at all — stay on camera, show a tip.
       if (ocr.words.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No text detected — try better lighting or hold steadier'),
-            behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 3),
-          ),
+          const SnackBar(content: Text('No text detected — try better lighting or hold steadier')),
         );
         return;
       }
 
-      // OCR done (fast, on-device). Kick off HTTP lookups without awaiting —
-      // navigate now so the loading state is visible during the wait.
       final scanner = BookScanner();
-      final clusterCount =
-          scanner.clusterByGap(ocr.words, gapThreshold: _kGapThreshold).length;
-      // TESTING: cache disabled so every scan is a fresh lookup — makes it
-      // possible to gauge accuracy without stale results. Pass `cache: bookCache`
-      // again to re-enable instant offline repeats for demos.
-      // statusSource is a mock until Georgetown PL grants access to real
-      // circulation status (see LibraryStatusSource).
       final resultsFuture = scanner.scanBooks(
         ocr.words,
         gapThreshold: _kGapThreshold,
@@ -176,13 +142,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => BookResultsScreen(
-            resultsFuture: resultsFuture,
-            words: ocr.words,
-            gapThreshold: _kGapThreshold,
-            clusterCount: clusterCount,
-            rotationUsed: ocr.rotationUsed,
-          ),
+          builder: (_) => BookResultsScreen(resultsFuture: resultsFuture),
         ),
       );
     } catch (e) {
@@ -190,10 +150,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       debugPrint('[CameraScreen] capture error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Capture failed: $e'),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text('Capture failed: $e')),
       );
     } finally {
       if (mounted) setState(() => _isCapturing = false);
@@ -203,84 +160,50 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     if (_permState == _PermState.checking) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        backgroundColor: kBgDark,
+        body: const Center(child: CircularProgressIndicator(color: kGold)),
       );
     }
-
     if (_permState == _PermState.denied) {
       return const _PermissionDeniedView();
     }
 
     final controller = _controller;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: kBgDark,
       body: SizedBox.expand(
         child: Stack(
           children: [
-            // ── Camera preview — full-bleed, fills the screen ───────────────
-            // The preview covers the whole screen (no black bars). The captured
-            // photo is then cropped to this same visible region before OCR (see
-            // _capture), so we only ever scan what's on screen.
+            // ── Camera preview ───────────────────────────────────────────────
             if (controller != null && controller.value.isInitialized)
               _CameraFramePreview(controller: controller)
             else
-              const Center(child: CircularProgressIndicator()),
+              const Center(child: CircularProgressIndicator(color: kGold)),
 
-            // ── Top scrim for legibility ────────────────────────────────────
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: 96,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black54, Colors.transparent],
-                  ),
-                ),
-              ),
-            ),
+            // ── Guide frame overlay ──────────────────────────────────────────
+            const _GuideOverlay(),
 
-            // ── Tip pill at top ─────────────────────────────────────────────
-            const Positioned(
+            // ── Instruction text ─────────────────────────────────────────────
+            Positioned(
               top: 16,
               left: 0,
               right: 0,
               child: Center(
-                child: _PillLabel('Fill the frame with the row of spines'),
+                child: Text(
+                  'Fill the frame with one row of spines',
+                  style: kLabel(12, color: const Color(0xFFCFC7BB)),
+                ),
               ),
             ),
 
-            // ── Edge chips — mark the ends so results read left → right ──────
-            // Left chip doubles as the charging-port guide (port goes on this side).
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: EdgeInsets.only(left: 12),
-                child: _EdgeChip(label: 'PORT', icon: Icons.bolt, accent: true),
-              ),
-            ),
-            const Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: _EdgeChip(label: 'RIGHT'),
-              ),
-            ),
-
-            // ── Shutter button — bottom centre ──────────────────────────────
+            // ── Shutter button ────────────────────────────────────────────────
             Positioned(
-              bottom: 28,
+              bottom: 22,
               left: 0,
               right: 0,
               child: Center(
-                child: _ShutterButton(
-                  isCapturing: _isCapturing,
-                  onTap: _capture,
-                ),
+                child: _ShutterButton(isCapturing: _isCapturing, onTap: _capture),
               ),
             ),
           ],
@@ -291,94 +214,61 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Permission denied view
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _PermissionDeniedView extends StatelessWidget {
-  const _PermissionDeniedView();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F1117),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 40),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.no_photography_outlined,
-                size: 72,
-                color: Color(0xFF5C6270),
-              ),
-              const SizedBox(height: 28),
-              const Text(
-                'Camera Access Required',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'ShelfScan needs your camera to scan book spines. '
-                'Your photos are processed on-device and never uploaded.',
-                style: TextStyle(color: Color(0xFF9BA0AB), fontSize: 15, height: 1.5),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 36),
-              FilledButton.icon(
-                onPressed: openAppSettings,
-                icon: const Icon(Icons.settings_outlined, size: 18),
-                label: const Text('Open Settings'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF4E9BFF),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Small helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 enum _PermState { checking, granted, denied }
 
-class _PillLabel extends StatelessWidget {
-  final String text;
-  const _PillLabel(this.text);
+// Guide frame: darkened vignette outside the scan rectangle + gold border.
+class _GuideOverlay extends StatelessWidget {
+  const _GuideOverlay();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: const TextStyle(color: Colors.white70, fontSize: 12),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        // Match design proportions: 60/916 left-right, 78/424 top, 112/424 bottom
+        final left   = w * 0.065;
+        final top    = h * 0.185;
+        final right  = w * 0.065;
+        final bottom = h * 0.265;
+        return CustomPaint(
+          size: Size(w, h),
+          painter: _GuidePainter(left: left, top: top, right: right, bottom: bottom),
+        );
+      },
     );
   }
 }
 
-// Fills the whole screen with the preview (cover, no black bars). The captured
-// still is cropped to match this visible region before OCR, so scanning stays
-// WYSIWYG — see visibleCropFractions / cropToVisibleRegion.
+class _GuidePainter extends CustomPainter {
+  final double left, top, right, bottom;
+  const _GuidePainter({required this.left, required this.top, required this.right, required this.bottom});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final outer = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final inner = Path()..addRect(
+        Rect.fromLTRB(left, top, size.width - right, size.height - bottom));
+    final vignette = Path.combine(PathOperation.difference, outer, inner);
+
+    canvas.drawPath(vignette, Paint()..color = const Color(0x66100F0E));
+
+    canvas.drawRect(
+      Rect.fromLTRB(left, top, size.width - right, size.height - bottom),
+      Paint()
+        ..color = const Color(0x80B68235)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GuidePainter old) =>
+      old.left != left || old.top != top || old.right != right || old.bottom != bottom;
+}
+
+// Full-bleed camera preview — matches what gets scanned.
 class _CameraFramePreview extends StatelessWidget {
   final CameraController controller;
   const _CameraFramePreview({required this.controller});
@@ -402,47 +292,6 @@ class _CameraFramePreview extends StatelessWidget {
   }
 }
 
-// Small rounded chip pinned to a screen edge. Marks the ends of the row so the
-// user knows the scan reads left → right; the left chip also flags the side the
-// charging port should be on.
-class _EdgeChip extends StatelessWidget {
-  final String label;
-  final IconData? icon;
-  final bool accent;
-  const _EdgeChip({required this.label, this.icon, this.accent = false});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = accent ? const Color(0xFF4E9BFF) : Colors.white70;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.45),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.45)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 16, color: color),
-            const SizedBox(height: 2),
-          ],
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.2,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ShutterButton extends StatelessWidget {
   final bool isCapturing;
   final VoidCallback onTap;
@@ -454,22 +303,56 @@ class _ShutterButton extends StatelessWidget {
       onTap: isCapturing ? null : onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        width: 72,
-        height: 72,
+        width: 60,
+        height: 60,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: isCapturing ? Colors.grey.shade700 : Colors.white,
-          border: Border.all(color: Colors.white70, width: 4),
+          color: isCapturing ? const Color(0xFFCCC8C2) : const Color(0xFFF3F2F2),
+          border: Border.all(color: const Color(0x80FFFFFF), width: 3),
         ),
         child: isCapturing
             ? const Padding(
-                padding: EdgeInsets.all(20),
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: Colors.black54,
-                ),
+                padding: EdgeInsets.all(17),
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8D857A)),
               )
             : null,
+      ),
+    );
+  }
+}
+
+class _PermissionDeniedView extends StatelessWidget {
+  const _PermissionDeniedView();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBgDark,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Camera access required', style: kHeading(22, color: const Color(0xFFEFE9E0))),
+            const SizedBox(height: 10),
+            Text(
+              'ShelfScan needs the camera to read book spines.',
+              style: kBody(13, color: const Color(0xFF8D857A)),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+            GestureDetector(
+              onTap: openAppSettings,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kGold),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text('Open Settings', style: kLabel(13, color: kGoldText)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

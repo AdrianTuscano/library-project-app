@@ -29,6 +29,9 @@ dependencies:
   # Runtime permission requests (camera denial → Settings prompt)
   permission_handler: ^11.3.0
 
+  # Google Fonts: Cormorant Garamond + Lora for the literary UI
+  google_fonts: ^6.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
