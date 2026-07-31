@@ -32,6 +32,9 @@ dependencies:
   # Google Fonts: Cormorant Garamond + Lora for the literary UI
   google_fonts: ^6.2.1
 
+  # Volume button / selfie-stick shutter via iOS AVAudioSession KVO
+  volume_controller: ^2.0.7
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

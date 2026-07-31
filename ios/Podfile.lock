@@ -61,11 +61,14 @@ PODS:
   - nanopb/decode (2.30910.0)
   - nanopb/encode (2.30910.0)
   - PromisesObjC (2.4.1)
+  - volume_controller (0.0.1):
+    - Flutter
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - google_mlkit_commons (from `.symlinks/plugins/google_mlkit_commons/ios`)
   - google_mlkit_text_recognition (from `.symlinks/plugins/google_mlkit_text_recognition/ios`)
+  - volume_controller (from `.symlinks/plugins/volume_controller/ios`)
 
 SPEC REPOS:
   trunk:
@@ -90,6 +93,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/google_mlkit_commons/ios"
   google_mlkit_text_recognition:
     :path: ".symlinks/plugins/google_mlkit_text_recognition/ios"
+  volume_controller:
+    :path: ".symlinks/plugins/volume_controller/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
@@ -108,6 +113,7 @@ SPEC CHECKSUMS:
   MLKitVision: e858c5f125ecc288e4a31127928301eaba9ae0c1
   nanopb: 438bc412db1928dac798aa6fd75726007be04262
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
+  volume_controller: 531ddf792994285c9b17f9d8a7e4dcdd29b3eae9
 
 PODFILE CHECKSUM: 47fd0d97ab39a69767c5ccdb01c1fa888e4935ac
 

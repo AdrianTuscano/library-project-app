@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:volume_controller/volume_controller.dart';
 import 'book_results_screen.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart';
@@ -25,10 +26,39 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   CameraController? _controller;
   _PermState _permState = _PermState.checking;
   bool _isCapturing = false;
+  double _savedVolume = 0.5;   // restored after every press so volume never drifts
+  bool _resetting = false;     // true while we're restoring — suppresses the callback loop
+  bool _volumeDebounce = false;
+
+  // ── Volume / selfie-stick shutter ─────────────────────────────────────────
+  // Two complementary paths cover every selfie-stick and physical-button type:
+  //
+  // 1. VolumeController (KVO on AVAudioSession.outputVolume) — catches the
+  //    physical side buttons and any BT remote that routes through the iOS
+  //    audio stack (the most common selfie-stick type).
+  //
+  // 2. HardwareKeyboard — catches BT HID remotes that send raw key events
+  //    (volume up/down) without touching the audio stack.
+
+  void _onVolumeChange(double _) {
+    // Ignore the callback we fired ourselves when restoring the volume.
+    if (_resetting || _volumeDebounce) return;
+    _volumeDebounce = true;
+
+    // Put the volume straight back so the user's level never changes.
+    _resetting = true;
+    VolumeController().setVolume(_savedVolume);
+    Future.delayed(const Duration(milliseconds: 400), () {
+      _resetting = false;
+      _volumeDebounce = false;
+    });
+
+    _capture();
+  }
 
   bool _handleKey(KeyEvent event) {
     if (_isCapturing) return false;
-    if (event is KeyDownEvent &&
+    if ((event is KeyDownEvent) &&
         (event.logicalKey == LogicalKeyboardKey.audioVolumeUp ||
          event.logicalKey == LogicalKeyboardKey.audioVolumeDown)) {
       _capture();
@@ -41,12 +71,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // Snapshot current volume so we can restore it after every button press.
+    VolumeController().getVolume().then((v) => _savedVolume = v);
+    VolumeController().showSystemUI = false;
+    VolumeController().listener(_onVolumeChange);
+
     HardwareKeyboard.instance.addHandler(_handleKey);
     _checkPermission();
   }
 
   @override
   void dispose() {
+    VolumeController().removeListener();
+    VolumeController().showSystemUI = true; // restore normal behaviour
     HardwareKeyboard.instance.removeHandler(_handleKey);
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();

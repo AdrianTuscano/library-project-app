@@ -16,8 +16,15 @@ import 'ocr_service.dart';
 
 const _kMaxDim = 2000;
 
+const _kSentinel = 'NO_BOOKS_FOUND';
+
 const _kPrompt = '''
 You are looking at a photo of a library bookshelf.
+
+First, check: can you clearly see book spines in this image? If the image shows something other than books (a wall, a person, a blurry object, an empty shelf, etc.) or if no spines are legible, respond with exactly:
+NO_BOOKS_FOUND
+
+Otherwise:
 
 Step 1 — Read every spine carefully, left to right, and draft a list of each book as:
 Full Title — Author Full Name
@@ -30,6 +37,13 @@ Step 2 — Review your draft. For each entry:
 
 Return ONLY the final corrected list — one book per line, leftmost first. Format: Title — Author. No commentary, no numbering, no markdown.
 ''';
+
+/// Thrown when Claude explicitly signals no books are visible in the frame.
+class NoBooksFoundException implements Exception {
+  const NoBooksFoundException();
+  @override
+  String toString() => 'No books found in frame';
+}
 
 class ClaudeOcr {
   final String apiKey;
@@ -98,7 +112,10 @@ class ClaudeOcr {
   }
 
   /// Parse "Title — Author" lines directly into BookResult objects.
+  /// Throws [NoBooksFoundException] if Claude returned the sentinel.
   static List<BookResult> _parseBooks(String text) {
+    if (text.trim().startsWith(_kSentinel)) throw const NoBooksFoundException();
+
     final books = <BookResult>[];
     var position = 1;
 

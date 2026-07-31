@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'book_scanner.dart';
+import 'claude_ocr.dart' show NoBooksFoundException;
 import 'design.dart';
 import 'shelf_sort_view.dart';
 
@@ -38,6 +39,7 @@ class _BookResultsScreenState extends State<BookResultsScreen>
     with SingleTickerProviderStateMixin {
   ScanResult? _result;
   String? _error;
+  bool _noBooks = false;
   int _selected = 0;
   int _revealed = 0;
 
@@ -79,12 +81,17 @@ class _BookResultsScreenState extends State<BookResultsScreen>
       });
     }).catchError((Object e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      if (e is NoBooksFoundException) {
+        setState(() => _noBooks = true);
+      } else {
+        setState(() => _error = e.toString());
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_noBooks) return _buildNoBooks();
     if (_error != null) return _buildError();
     if (_result == null) return _buildProcessing();
     return _buildShelf(_result!.books);
@@ -136,6 +143,58 @@ class _BookResultsScreenState extends State<BookResultsScreen>
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  // ── No books in frame ───────────────────────────────────────────────────────
+
+  Widget _buildNoBooks() {
+    return Scaffold(
+      backgroundColor: kBgDark,
+      body: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Faded bars — same visual language as processing, but dim
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < _placeholders.length; i++)
+                    Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      width: _placeholders[i].w,
+                      height: _placeholders[i].h,
+                      color: const Color(0xFF26241F),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              Text('No books detected',
+                  style: kHeading(24, color: const Color(0xFFEFE9E0))),
+              const SizedBox(height: 8),
+              Text(
+                'Make sure book spines fill the frame\nand the shelf is well-lit.',
+                textAlign: TextAlign.center,
+                style: kLabel(13, color: const Color(0xFF8D857A)),
+              ),
+              const SizedBox(height: 28),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kGold),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text('Scan again', style: kLabel(13, color: kGoldText)),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
