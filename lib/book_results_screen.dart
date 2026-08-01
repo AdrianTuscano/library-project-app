@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart' show NoBooksFoundException;
 import 'design.dart';
+import 'library_status_service.dart';
 import 'shelf_sort_view.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,6 +42,9 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   int _selected = 0;
   int _revealed = 0;
 
+  // position → LibraryStatus, populated async after books are identified
+  final Map<int, LibraryStatus> _statuses = {};
+
   // Fixed placeholder bars shown during processing animation
   static const _placeholders = [
     (w: 30.0, h: 152.0, c: Color(0xFF5C5348)),
@@ -76,6 +80,7 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
       Future.delayed(const Duration(milliseconds: 300), () {
         if (!mounted) return;
         setState(() => _result = result);
+        _checkAllStatuses(result.books);
       });
     }).catchError((Object e) {
       if (!mounted) return;
@@ -85,6 +90,15 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
         setState(() => _error = e.toString());
       }
     });
+  }
+
+  void _checkAllStatuses(List<BookResult> books) {
+    for (final book in books) {
+      libraryStatus.checkByTitle(book.title, book.author).then((status) {
+        if (!mounted) return;
+        setState(() => _statuses[book.position] = status);
+      }).catchError((_) {});
+    }
   }
 
   @override
@@ -313,6 +327,7 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
                     _SpineBar(
                       book: books[i],
                       selected: i == _selected,
+                      status: _statuses[books[i].position],
                       onTap: () => setState(() => _selected = i),
                     ),
                   const SizedBox(width: 20),
@@ -337,6 +352,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   }
 
   Widget _buildDetailPanel(BookResult b) {
+    final status = _statuses[b.position];
+
     return Padding(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -364,6 +381,30 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
           _DetailField(
               label: 'MATCH',
               value: b.confidence == 'high' ? 'High confidence' : 'Possible match'),
+
+          // ── Library status ─────────────────────────────────────────────────
+          const SizedBox(height: 13),
+          const Divider(color: kDivider, height: 1),
+          const SizedBox(height: 13),
+          _LibraryStatusField(status: status),
+
+          // ── Reshelved alert ────────────────────────────────────────────────
+          if (status?.isReshelved == true) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kRust.withValues(alpha: 0.5)),
+                borderRadius: BorderRadius.circular(3),
+                color: kRust.withValues(alpha: 0.07),
+              ),
+              child: Text(
+                'Checked out but on shelf — possible reshelve',
+                style: kLabel(11, color: kRust),
+              ),
+            ),
+          ],
+
           const Spacer(),
           GestureDetector(
             onTap: () {},
@@ -410,44 +451,89 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
 class _SpineBar extends StatelessWidget {
   final BookResult book;
   final bool selected;
+  final LibraryStatus? status;
   final VoidCallback onTap;
 
   const _SpineBar({
     required this.book,
     required this.selected,
     required this.onTap,
+    this.status,
   });
 
   int get _w => spineWidth(book.title);
   int get _h => spineHeight(book.title, book.author);
 
+  Color? get _dotColor {
+    if (status == null) return null;
+    return switch (status!.status) {
+      CircStatus.available   => const Color(0xFF4A7C59),
+      CircStatus.checkedOut  => kRust,
+      CircStatus.unknown     => null,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = spineColor(book.position);
+    final dot = _dotColor;
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: _w.toDouble(),
-        height: _h.toDouble(),
-        margin: const EdgeInsets.only(right: 7),
-        decoration: BoxDecoration(
-          color: color,
-          border: selected
-              ? Border.all(color: kGold, width: 1.5)
-              : null,
-        ),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Center(
-          child: RotatedBox(
-            quarterTurns: 3,
-            child: Text(
-              '${book.position}  ${book.title}',
-              style: kLabel(10, color: const Color(0xFFF1ECE4), tracking: 0.05),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: _w.toDouble(),
+            height: _h.toDouble(),
+            margin: const EdgeInsets.only(right: 7),
+            decoration: BoxDecoration(
+              color: color,
+              border: selected
+                  ? Border.all(color: kGold, width: 1.5)
+                  : null,
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Center(
+              child: RotatedBox(
+                quarterTurns: 3,
+                child: Text(
+                  '${book.position}  ${book.title}',
+                  style: kLabel(10, color: const Color(0xFFF1ECE4), tracking: 0.05),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           ),
-        ),
+          if (dot != null)
+            Positioned(
+              top: 5,
+              right: 10,
+              child: Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: dot,
+                  border: Border.all(color: const Color(0x40000000), width: 0.5),
+                ),
+              ),
+            ),
+          // Pulsing indicator while status is still loading
+          if (status == null)
+            Positioned(
+              top: 5,
+              right: 10,
+              child: Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0x40FFFFFF),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -470,6 +556,46 @@ class _DetailField extends StatelessWidget {
         Text(label, style: kLabel(10, color: kTextFaint, tracking: 0.14)),
         const SizedBox(height: 2),
         Text(value, style: kBody(13.5)),
+      ],
+    );
+  }
+}
+
+class _LibraryStatusField extends StatelessWidget {
+  final LibraryStatus? status;
+  const _LibraryStatusField({this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == null) {
+      return Row(
+        children: [
+          const SizedBox(
+            width: 10, height: 10,
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: kTextFaint),
+          ),
+          const SizedBox(width: 8),
+          Text('Checking library…', style: kLabel(11, color: kTextFaint)),
+        ],
+      );
+    }
+
+    final (label, value, color) = switch (status!.status) {
+      CircStatus.available  => ('LIBRARY STATUS', 'Available', const Color(0xFF4A7C59)),
+      CircStatus.checkedOut => (
+          'LIBRARY STATUS',
+          'Checked out${status!.dueDate != null ? ' · due ${status!.dueDate}' : ''}',
+          kRust,
+        ),
+      CircStatus.unknown    => ('LIBRARY STATUS', 'Unknown', kTextFaint),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: kLabel(10, color: kTextFaint, tracking: 0.14)),
+        const SizedBox(height: 2),
+        Text(value, style: kBody(13, color: color)),
       ],
     );
   }

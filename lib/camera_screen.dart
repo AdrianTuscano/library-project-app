@@ -2,9 +2,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'book_results_screen.dart';
+import 'book_scan_screen.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart';
 import 'cloud_vision_ocr.dart';
@@ -15,6 +17,8 @@ import 'main.dart';
 
 const double _kGapThreshold = 100; // only used by fallback OCR path
 
+enum _ScanMode { shelf, book }
+
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -24,11 +28,14 @@ class CameraScreen extends StatefulWidget {
 
 class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
   CameraController? _controller;
+  MobileScannerController? _barcodeController;
   _PermState _permState = _PermState.checking;
   String? _cameraError;
   bool _isCapturing = false;
-  double _savedVolume = 0.5;   // restored after every press so volume never drifts
-  bool _resetting = false;     // true while we're restoring — suppresses the callback loop
+  bool _barcodeScanned = false;       // debounce: one navigation per scan
+  _ScanMode _mode = _ScanMode.shelf;
+  double _savedVolume = 0.5;
+  bool _resetting = false;
   bool _volumeDebounce = false;
 
   // ── Volume / selfie-stick shutter ─────────────────────────────────────────
@@ -82,13 +89,50 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     _checkPermission();
   }
 
+  // ── Mode switching ────────────────────────────────────────────────────────
+
+  Future<void> _switchMode(_ScanMode mode) async {
+    if (_mode == mode) return;
+    if (mode == _ScanMode.book) {
+      // Hand camera to MobileScanner — dispose CameraController first.
+      await _controller?.dispose();
+      _controller = null;
+      _barcodeController = MobileScannerController(
+        detectionSpeed: DetectionSpeed.normal,
+        facing: CameraFacing.back,
+      );
+    } else {
+      await _barcodeController?.dispose();
+      _barcodeController = null;
+      await _initCamera();
+    }
+    if (mounted) setState(() { _mode = mode; _barcodeScanned = false; });
+  }
+
+  void _onBarcodeDetected(BarcodeCapture capture) {
+    if (_barcodeScanned) return;
+    final raw = capture.barcodes
+        .where((b) => b.rawValue != null)
+        .map((b) => b.rawValue!)
+        .firstOrNull;
+    if (raw == null) return;
+    _barcodeScanned = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BookScanScreen(isbn: raw)),
+    ).then((_) {
+      if (mounted) setState(() => _barcodeScanned = false);
+    });
+  }
+
   @override
   void dispose() {
     VolumeController().removeListener();
-    VolumeController().showSystemUI = true; // restore normal behaviour
+    VolumeController().showSystemUI = true;
     HardwareKeyboard.instance.removeHandler(_handleKey);
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    _barcodeController?.dispose();
     super.dispose();
   }
 
@@ -266,41 +310,66 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       );
     }
 
+    final pad = MediaQuery.of(context).padding;
     final controller = _controller;
+
     return Scaffold(
       backgroundColor: kBgDark,
       body: SizedBox.expand(
         child: Stack(
           children: [
-            // ── Camera preview ───────────────────────────────────────────────
-            if (controller != null && controller.value.isInitialized)
-              _CameraFramePreview(controller: controller)
-            else
-              const Center(child: CircularProgressIndicator(color: kGold)),
-
-            // ── Guide frame overlay ──────────────────────────────────────────
-            const _GuideOverlay(),
+            // ── Camera / barcode feed ────────────────────────────────────────
+            if (_mode == _ScanMode.shelf) ...[
+              if (controller != null && controller.value.isInitialized)
+                _CameraFramePreview(controller: controller)
+              else
+                const Center(child: CircularProgressIndicator(color: kGold)),
+              const _GuideOverlay(mode: _ScanMode.shelf),
+            ] else ...[
+              if (_barcodeController != null)
+                MobileScanner(
+                  controller: _barcodeController!,
+                  onDetect: _onBarcodeDetected,
+                )
+              else
+                const Center(child: CircularProgressIndicator(color: kGold)),
+              const _GuideOverlay(mode: _ScanMode.book),
+            ],
 
             // ── Instruction text ─────────────────────────────────────────────
             Positioned(
-              top: MediaQuery.of(context).padding.top + 12,
+              top: pad.top + 12,
               left: 0,
               right: 0,
               child: Center(
                 child: Text(
-                  'Fill the frame with one row of spines',
+                  _mode == _ScanMode.shelf
+                      ? 'Fill the frame with one row of spines'
+                      : 'Point at the ISBN barcode on the book',
                   style: kLabel(12, color: const Color(0xFFCFC7BB)),
                 ),
               ),
             ),
 
-            // ── Shutter button ────────────────────────────────────────────────
+            // ── Shutter button (shelf mode only) ─────────────────────────────
+            if (_mode == _ScanMode.shelf)
+              Positioned(
+                bottom: pad.bottom + 16,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: _ShutterButton(
+                      isCapturing: _isCapturing, onTap: _capture),
+                ),
+              ),
+
+            // ── Mode switcher pill ────────────────────────────────────────────
             Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 16,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: _ShutterButton(isCapturing: _isCapturing, onTap: _capture),
+              bottom: pad.bottom + 14,
+              right: 28,
+              child: _ModeSwitcher(
+                current: _mode,
+                onSwitch: _switchMode,
               ),
             ),
           ],
@@ -316,7 +385,8 @@ enum _PermState { checking, granted, denied }
 
 // Guide frame: darkened vignette outside the scan rectangle + gold border.
 class _GuideOverlay extends StatelessWidget {
-  const _GuideOverlay();
+  final _ScanMode mode;
+  const _GuideOverlay({required this.mode});
 
   @override
   Widget build(BuildContext context) {
@@ -324,11 +394,23 @@ class _GuideOverlay extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
-        // Match design proportions: 60/916 left-right, 78/424 top, 112/424 bottom
-        final left   = w * 0.065;
-        final top    = h * 0.185;
-        final right  = w * 0.065;
-        final bottom = h * 0.265;
+
+        final double left, top, right, bottom;
+
+        if (mode == _ScanMode.shelf) {
+          // Wide landscape strip — full row of spines
+          left   = w * 0.065;
+          top    = h * 0.185;
+          right  = w * 0.065;
+          bottom = h * 0.265;
+        } else {
+          // Wide short rectangle — ISBN / EAN-13 barcode in landscape
+          left   = w * 0.15;
+          top    = h * 0.30;
+          right  = w * 0.15;
+          bottom = h * 0.30;
+        }
+
         return CustomPaint(
           size: Size(w, h),
           painter: _GuidePainter(left: left, top: top, right: right, bottom: bottom),
@@ -413,6 +495,62 @@ class _ShutterButton extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8D857A)),
               )
             : null,
+      ),
+    );
+  }
+}
+
+// Mode switcher pill — lives in the bottom-right corner of the camera view.
+class _ModeSwitcher extends StatelessWidget {
+  final _ScanMode current;
+  final void Function(_ScanMode) onSwitch;
+  const _ModeSwitcher({required this.current, required this.onSwitch});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: const Color(0xBB1A1917),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: const Color(0x33FFFFFF), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _Pill(label: 'SHELF', active: current == _ScanMode.shelf,
+              onTap: () => onSwitch(_ScanMode.shelf)),
+          _Pill(label: 'BOOK',  active: current == _ScanMode.book,
+              onTap: () => onSwitch(_ScanMode.book)),
+        ],
+      ),
+    );
+  }
+}
+
+class _Pill extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  const _Pill({required this.label, required this.active, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: active ? kGold : Colors.transparent,
+          borderRadius: BorderRadius.circular(17),
+        ),
+        child: Text(
+          label,
+          style: kLabel(11,
+              color: active ? const Color(0xFF1A1917) : const Color(0xFFBBB5AD),
+              tracking: 0.08),
+        ),
       ),
     );
   }

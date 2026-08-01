@@ -35,6 +35,9 @@ dependencies:
   # Volume button / selfie-stick shutter via iOS AVAudioSession KVO
   volume_controller: ^2.0.7
 
+  # Barcode scanning for individual book mode (ISBN / EAN-13)
+  mobile_scanner: ^5.2.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
