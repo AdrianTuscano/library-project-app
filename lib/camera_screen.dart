@@ -1,19 +1,18 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:volume_controller/volume_controller.dart';
 import 'book_results_screen.dart';
 import 'book_scan_screen.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart';
 import 'cloud_vision_ocr.dart';
 import 'design.dart';
+import 'main.dart';
 import 'ocr_config.dart';
 import 'ocr_service.dart';
-import 'main.dart';
+import 'volume_shutter_service.dart';
 
 const double _kGapThreshold = 100; // only used by fallback OCR path
 
@@ -32,67 +31,29 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   _PermState _permState = _PermState.checking;
   String? _cameraError;
   bool _isCapturing = false;
-  bool _barcodeScanned = false;       // debounce: one navigation per scan
+  bool _barcodeScanned = false;
+  bool _isSwitchingMode = false;
   _ScanMode _mode = _ScanMode.shelf;
-  double _savedVolume = 0.5;
-  bool _resetting = false;
-  bool _volumeDebounce = false;
 
-  // ── Volume / selfie-stick shutter ─────────────────────────────────────────
-  // Two complementary paths cover every selfie-stick and physical-button type:
-  //
-  // 1. VolumeController (KVO on AVAudioSession.outputVolume) — catches the
-  //    physical side buttons and any BT remote that routes through the iOS
-  //    audio stack (the most common selfie-stick type).
-  //
-  // 2. HardwareKeyboard — catches BT HID remotes that send raw key events
-  //    (volume up/down) without touching the audio stack.
-
-  void _onVolumeChange(double _) {
-    // Ignore the callback we fired ourselves when restoring the volume.
-    if (_resetting || _volumeDebounce) return;
-    _volumeDebounce = true;
-
-    // Put the volume straight back so the user's level never changes.
-    _resetting = true;
-    VolumeController().setVolume(_savedVolume);
-    Future.delayed(const Duration(milliseconds: 400), () {
-      _resetting = false;
-      _volumeDebounce = false;
-    });
-
-    _capture();
-  }
-
-  bool _handleKey(KeyEvent event) {
-    if (_isCapturing) return false;
-    if ((event is KeyDownEvent) &&
-        (event.logicalKey == LogicalKeyboardKey.audioVolumeUp ||
-         event.logicalKey == LogicalKeyboardKey.audioVolumeDown)) {
-      _capture();
-      return true;
-    }
-    return false;
-  }
+  // Volume button and selfie-stick shutter are handled by VolumeShutterService
+  // (a singleton that lives for the app lifetime). CameraScreen only registers
+  // its capture action as the "root" handler — the service decides whether to
+  // pop a screen or capture based on the current navigator state.
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // Snapshot current volume so we can restore it after every button press.
-    VolumeController().getVolume().then((v) => _savedVolume = v);
-    VolumeController().showSystemUI = false;
-    VolumeController().listener(_onVolumeChange);
-
-    HardwareKeyboard.instance.addHandler(_handleKey);
+    VolumeShutterService.instance.setRootAction(_capture);
     _checkPermission();
   }
 
   // ── Mode switching ────────────────────────────────────────────────────────
 
   Future<void> _switchMode(_ScanMode mode) async {
-    if (_mode == mode) return;
+    if (_mode == mode || _isSwitchingMode || _isCapturing) return;
+    _isSwitchingMode = true;
+    try {
     if (mode == _ScanMode.book) {
       // Hand camera to MobileScanner — dispose CameraController first.
       await _controller?.dispose();
@@ -107,10 +68,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       await _initCamera();
     }
     if (mounted) setState(() { _mode = mode; _barcodeScanned = false; });
+    } finally {
+      _isSwitchingMode = false;
+    }
   }
 
   void _onBarcodeDetected(BarcodeCapture capture) {
-    if (_barcodeScanned) return;
+    if (_barcodeScanned || !mounted) return;
     final raw = capture.barcodes
         .where((b) => b.rawValue != null)
         .map((b) => b.rawValue!)
@@ -127,9 +91,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   @override
   void dispose() {
-    VolumeController().removeListener();
-    VolumeController().showSystemUI = true;
-    HardwareKeyboard.instance.removeHandler(_handleKey);
+    VolumeShutterService.instance.clearRootAction();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     _barcodeController?.dispose();

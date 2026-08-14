@@ -5,6 +5,8 @@ import 'package:camera/camera.dart';
 import 'book_cache.dart';
 import 'camera_screen.dart';
 import 'design.dart';
+import 'nav.dart';
+import 'volume_shutter_service.dart';
 
 List<CameraDescription> cameras = [];
 final bookCache = BookCache();
@@ -19,6 +21,7 @@ Future<void> main() async {
   }
   await bookCache.init();
   if (kDebugMode) await bookCache.clear();
+  VolumeShutterService.instance.init();
   runApp(const ShelfScanApp());
 }
 
@@ -44,6 +47,7 @@ class ShelfScanApp extends StatelessWidget {
           behavior: SnackBarBehavior.floating,
         ),
       ),
+      navigatorKey: navigatorKey,
       home: const CameraScreen(),
       debugShowCheckedModeBanner: false,
     );
