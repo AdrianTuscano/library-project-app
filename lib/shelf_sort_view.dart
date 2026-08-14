@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'book_results_screen.dart' show lastName, isNonFiction;
+import 'book_results_screen.dart' show lastName, isNonFiction, deweyValue;
 import 'book_scanner.dart';
 import 'design.dart';
 
@@ -21,9 +21,52 @@ class _SortItem {
   bool get needsFix => isNF || !inPlace;
 }
 
+// ── Sort key helpers ──────────────────────────────────────────────────────────
+
+/// Primary sort key for a book, using call number sticker when available.
+///
+/// Fiction stickers ("F SMI", "JF ROW") sort by the letter suffix.
+/// Non-fiction stickers (Dewey) sort numerically.
+/// When no sticker is present, fall back to author surname.
+String _sortKey(BookResult b) {
+  final cn = b.callNumber?.trim().toUpperCase();
+  if (cn != null && cn.isNotEmpty) {
+    // Fiction / juvenile fiction: "F SMI" → use suffix letters as sort key
+    final fictionMatch = RegExp(r'^J?F\s+(.+)$').firstMatch(cn);
+    if (fictionMatch != null) return fictionMatch.group(1)!;
+
+    // Biography: "B SMI" / "BIO SMI" → suffix letters
+    final bioMatch = RegExp(r'^BIO?\s+(.+)$').firstMatch(cn);
+    if (bioMatch != null) return bioMatch.group(1)!;
+
+    // Dewey decimal: left-pad integer portion for correct lexicographic order
+    final dewey = deweyValue(b.callNumber);
+    if (dewey != null) return dewey.toStringAsFixed(4).padLeft(12, '0');
+
+    // Unknown sticker format — use it verbatim
+    return cn;
+  }
+  // No sticker: fall back to author surname
+  return lastName(b.author);
+}
+
+/// True when the book belongs in the non-fiction / pull-aside group.
+/// Prioritises the call number sticker; falls back to heuristic if absent.
+bool _isNonFiction(BookResult b) {
+  final cn = b.callNumber?.trim().toUpperCase();
+  if (cn != null && cn.isNotEmpty) {
+    // Explicit fiction markers
+    if (RegExp(r'^J?F\b').hasMatch(cn)) return false;
+    // Everything else with a sticker (Dewey, BIO, etc.) is non-fiction
+    return true;
+  }
+  // No sticker — fall back to Dewey heuristic on any existing callNumber
+  return isNonFiction(b);
+}
+
 List<_SortItem> _computeSort(List<BookResult> books) {
-  final fiction = books.where((b) => !isNonFiction(b)).toList()
-    ..sort((a, b) => lastName(a.author).compareTo(lastName(b.author)));
+  final fiction = books.where((b) => !_isNonFiction(b)).toList()
+    ..sort((a, b) => _sortKey(a).compareTo(_sortKey(b)));
 
   final Map<int, int> targetByPos = {};
   for (var i = 0; i < fiction.length; i++) {
@@ -32,7 +75,7 @@ List<_SortItem> _computeSort(List<BookResult> books) {
 
   return List.generate(books.length, (i) {
     final b = books[i];
-    return _SortItem(b, i + 1, isNonFiction(b) ? null : targetByPos[b.position]);
+    return _SortItem(b, i + 1, _isNonFiction(b) ? null : targetByPos[b.position]);
   });
 }
 

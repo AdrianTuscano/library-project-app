@@ -27,16 +27,29 @@ NO_BOOKS_FOUND
 
 Otherwise:
 
-Step 1 — Read every spine carefully, left to right, and draft a list of each book as:
-Full Title — Author Full Name
+Step 1 — Read every spine carefully, left to right. For each book note:
+  a) The full title
+  b) The author's full name
+  c) The library call number sticker, if one is visible. These are small rectangular labels, usually near the bottom of the spine. Common formats:
+     - Fiction: "F" followed by 2–3 letters, e.g. "F SMI" or "F WAL"
+     - Juvenile fiction: "JF" followed by letters, e.g. "JF ROW"
+     - Non-fiction: a Dewey Decimal number, e.g. "813.54" or "973.7 HAL"
+     - Biography: "B" or "BIO" followed by letters
+     If no sticker is visible or legible, omit the call number field.
 
 Step 2 — Review your draft. For each entry:
 - Is this a real published book? Correct any misread spines.
 - Include the complete title with subtitle (e.g. "Scrum: The Art of Doing Twice the Work in Half the Time", not just "Scrum").
 - Series books often print the series name large and the individual title small — return the individual book title, not just the series name.
 - Use the author's full name as it appears on the cover.
+- Double-check the call number sticker text — these are often small and easy to misread.
 
-Return ONLY the final corrected list — one book per line, leftmost first. Format: Title — Author. No commentary, no numbering, no markdown.
+Return ONLY the final corrected list — one book per line, leftmost first.
+
+Format when call number is visible:   Title — Author — CALL_NUMBER
+Format when no call number visible:   Title — Author
+
+No commentary, no numbering, no markdown.
 ''';
 
 /// Thrown when Claude explicitly signals no books are visible in the frame.
@@ -111,7 +124,8 @@ class ClaudeOcr {
     final books = _parseBooks(rawText);
     debugPrint('[ClaudeOcr] identified ${books.length} books');
     for (final b in books) {
-      debugPrint('[ClaudeOcr] #${b.position} ${b.title} — ${b.author}');
+      final cn = b.callNumber != null ? ' [${b.callNumber}]' : '';
+      debugPrint('[ClaudeOcr] #${b.position} ${b.title} — ${b.author}$cn');
     }
 
     if (books.isEmpty) throw const OcrException('Claude found no books in this image');
@@ -119,7 +133,8 @@ class ClaudeOcr {
     return ScanResult(books: books, isOffline: false);
   }
 
-  /// Parse "Title — Author" lines directly into BookResult objects.
+  /// Parse "Title — Author [— CALL_NUMBER]" lines into BookResult objects.
+  /// The call number is optional; lines without one still parse correctly.
   /// Throws [NoBooksFoundException] if Claude returned the sentinel.
   static List<BookResult> _parseBooks(String text) {
     if (text.contains(_kSentinel)) throw const NoBooksFoundException();
@@ -133,12 +148,18 @@ class ClaudeOcr {
 
       String title = line;
       String author = '';
+      String? callNumber;
 
       for (final sep in ['—', '--', '–']) {
         if (line.contains(sep)) {
-          final parts = line.split(sep);
-          title = parts[0].trim();
-          author = parts.sublist(1).join(sep).trim();
+          final parts = line.split(sep).map((s) => s.trim()).toList();
+          title = parts[0];
+          author = parts.length > 1 ? parts[1] : '';
+          // Third field (if present) is the call number sticker
+          if (parts.length > 2) {
+            final raw = parts.sublist(2).join(' ').trim();
+            if (raw.isNotEmpty) callNumber = raw;
+          }
           break;
         }
       }
@@ -148,6 +169,7 @@ class ClaudeOcr {
       books.add(BookResult(
         title: title,
         author: author,
+        callNumber: callNumber,
         confidence: 'high',
         position: position++,
         source: ResultSource.network,
