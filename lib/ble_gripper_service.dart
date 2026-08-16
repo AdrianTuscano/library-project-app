@@ -174,7 +174,8 @@ class BleGripperService extends ChangeNotifier {
 
   Future<void> _write(String cmd) async {
     try {
-      await _char!.write(cmd.codeUnits, withoutResponse: false);
+      final bytes = cmd.codeUnits;
+      await _char!.write(bytes, withoutResponse: true);
       debugPrint('[BLE] → $cmd');
     } catch (e) {
       debugPrint('[BLE] write error: $e');

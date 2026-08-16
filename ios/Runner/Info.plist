@@ -28,6 +28,12 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>ShelfScan uses Bluetooth to control the book gripper.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>ShelfScan uses the local network to discover Bluetooth accessories.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_flutter-local-network._tcp</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used to scan book spines for cataloging.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

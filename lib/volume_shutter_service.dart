@@ -23,9 +23,14 @@ class VolumeShutterService {
   bool _debounce = false;
 
   void init() {
-    VolumeController().getVolume().then((v) => _savedVolume = v);
-    VolumeController().showSystemUI = false;
-    VolumeController().listener(_onVolumeChange);
+    try {
+      VolumeController().getVolume().then((v) => _savedVolume = v);
+      VolumeController().showSystemUI = false;
+      VolumeController().listener(_onVolumeChange);
+    } catch (_) {
+      // VolumeController can fail on some iOS versions — volume-button
+      // shutter will be unavailable but the rest of the app still works.
+    }
     HardwareKeyboard.instance.addHandler(_handleKey);
   }
 

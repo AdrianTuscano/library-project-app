@@ -663,21 +663,7 @@ class _GripperPanel extends StatelessWidget {
                 // ── Connected controls ─────────────────────────────────────
                 Text('Grip', style: kLabel(11, color: const Color(0xFF8D857A), tracking: 0.06)),
                 const SizedBox(height: 4),
-                SliderTheme(
-                  data: SliderThemeData(
-                    trackHeight: 2,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-                    activeTrackColor: kGold,
-                    inactiveTrackColor: const Color(0xFF3A3835),
-                    thumbColor: const Color(0xFFEFE9E0),
-                    overlayColor: kGold.withValues(alpha: 0.15),
-                  ),
-                  child: Slider(
-                    value: svc.position,
-                    onChanged: svc.moving ? null : (v) => svc.moveTo(v),
-                  ),
-                ),
+                _GripSlider(svc: svc),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -749,6 +735,46 @@ class _GripperPanel extends StatelessWidget {
       case GripperState.connecting:   return 'Connecting...';
       case GripperState.connected:    return 'Connected';
     }
+  }
+}
+
+// Slider that only sends a BLE command when the user lifts their finger,
+// so we don't flood the ESP32 with writes on every drag pixel.
+class _GripSlider extends StatefulWidget {
+  final BleGripperService svc;
+  const _GripSlider({required this.svc});
+
+  @override
+  State<_GripSlider> createState() => _GripSliderState();
+}
+
+class _GripSliderState extends State<_GripSlider> {
+  double? _dragging; // local value while finger is down; null = use svc.position
+
+  @override
+  Widget build(BuildContext context) {
+    final value = _dragging ?? widget.svc.position;
+    return SliderTheme(
+      data: SliderThemeData(
+        trackHeight: 3,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+        activeTrackColor: kGold,
+        inactiveTrackColor: const Color(0xFF3A3835),
+        thumbColor: const Color(0xFFEFE9E0),
+        overlayColor: kGold.withValues(alpha: 0.15),
+      ),
+      child: Slider(
+        value: value,
+        onChanged: widget.svc.moving
+            ? null
+            : (v) => setState(() => _dragging = v),
+        onChangeEnd: (v) {
+          setState(() => _dragging = null);
+          widget.svc.moveTo(v);
+        },
+      ),
+    );
   }
 }
 

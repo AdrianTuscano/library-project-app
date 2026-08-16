@@ -21,7 +21,7 @@ Future<void> main() async {
   }
   await bookCache.init();
   if (kDebugMode) await bookCache.clear();
-  VolumeShutterService.instance.init();
+  try { VolumeShutterService.instance.init(); } catch (_) {}
   runApp(const ShelfScanApp());
 }
 
