@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'ble_gripper_service.dart';
 import 'book_results_screen.dart';
 import 'book_scan_screen.dart';
 import 'book_scanner.dart';
@@ -33,6 +34,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isCapturing = false;
   bool _barcodeScanned = false;
   bool _isSwitchingMode = false;
+  bool _showGripperPanel = false;
   _ScanMode _mode = _ScanMode.shelf;
 
   // Volume button and selfie-stick shutter are handled by VolumeShutterService
@@ -227,9 +229,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     if (_permState == _PermState.checking) {
-      return Scaffold(
+      return const Scaffold(
         backgroundColor: kBgDark,
-        body: const Center(child: CircularProgressIndicator(color: kGold)),
+        body: Center(child: CircularProgressIndicator(color: kGold)),
       );
     }
     if (_permState == _PermState.denied) {
@@ -332,6 +334,26 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
               child: _ModeSwitcher(
                 current: _mode,
                 onSwitch: _switchMode,
+              ),
+            ),
+
+            // ── Gripper panel (expands above button) ─────────────────────────
+            if (_showGripperPanel)
+              Positioned(
+                bottom: pad.bottom + 60,
+                left: 20,
+                child: _GripperPanel(
+                  onClose: () => setState(() => _showGripperPanel = false),
+                ),
+              ),
+
+            // ── BLE gripper button ────────────────────────────────────────────
+            Positioned(
+              bottom: pad.bottom + 14,
+              left: 20,
+              child: _GripperButton(
+                panelOpen: _showGripperPanel,
+                onTap: () => setState(() => _showGripperPanel = !_showGripperPanel),
               ),
             ),
           ],
@@ -517,6 +539,264 @@ class _Pill extends StatelessWidget {
     );
   }
 }
+
+// ── BLE Gripper ───────────────────────────────────────────────────────────────
+
+class _GripperButton extends StatelessWidget {
+  final bool panelOpen;
+  final VoidCallback onTap;
+  const _GripperButton({required this.panelOpen, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: BleGripperService.instance,
+      builder: (context, _) {
+        final svc = BleGripperService.instance;
+        final Color dotColor;
+        switch (svc.state) {
+          case GripperState.connected:
+            dotColor = const Color(0xFF6FCF97);
+          case GripperState.scanning:
+          case GripperState.connecting:
+            dotColor = kGold;
+          case GripperState.disconnected:
+            dotColor = const Color(0xFF6B6560);
+        }
+
+        return GestureDetector(
+          onTap: onTap,
+          child: Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: panelOpen ? const Color(0xEE1A1917) : const Color(0xBB1A1917),
+              borderRadius: BorderRadius.circular(17),
+              border: Border.all(
+                color: panelOpen
+                    ? const Color(0x66FFFFFF)
+                    : const Color(0x33FFFFFF),
+                width: 0.5,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.bluetooth, size: 14, color: dotColor),
+                const SizedBox(width: 5),
+                Text('GRIPPER', style: kLabel(11, color: const Color(0xFFBBB5AD), tracking: 0.08)),
+                const SizedBox(width: 6),
+                Container(
+                  width: 6, height: 6,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: dotColor),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _GripperPanel extends StatelessWidget {
+  final VoidCallback onClose;
+  const _GripperPanel({required this.onClose});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: BleGripperService.instance,
+      builder: (context, _) {
+        final svc = BleGripperService.instance;
+        return Container(
+          width: 240,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xF01A1917),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0x33FFFFFF), width: 0.5),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Header ──────────────────────────────────────────────────────
+              Row(
+                children: [
+                  Text('Book Gripper', style: kHeading(15, color: const Color(0xFFEFE9E0))),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: onClose,
+                    child: const Icon(Icons.close, size: 16, color: Color(0xFF8D857A)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(_statusLabel(svc.state),
+                  style: kBody(11, color: const Color(0xFF8D857A))),
+              const SizedBox(height: 14),
+
+              if (svc.state == GripperState.disconnected) ...[
+                // ── Connect button ─────────────────────────────────────────
+                _PanelButton(
+                  label: 'Connect',
+                  color: kGold,
+                  textColor: const Color(0xFF1A1917),
+                  onTap: BleGripperService.instance.connect,
+                ),
+                if (svc.error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(svc.error!, style: kBody(10, color: const Color(0xFFE07070)),
+                      maxLines: 2),
+                ],
+              ] else if (svc.state == GripperState.scanning ||
+                         svc.state == GripperState.connecting) ...[
+                // ── Scanning / connecting ──────────────────────────────────
+                const Center(
+                  child: SizedBox(
+                    width: 22, height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: kGold),
+                  ),
+                ),
+              ] else ...[
+                // ── Connected controls ─────────────────────────────────────
+                Text('Grip', style: kLabel(11, color: const Color(0xFF8D857A), tracking: 0.06)),
+                const SizedBox(height: 4),
+                SliderTheme(
+                  data: SliderThemeData(
+                    trackHeight: 2,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                    activeTrackColor: kGold,
+                    inactiveTrackColor: const Color(0xFF3A3835),
+                    thumbColor: const Color(0xFFEFE9E0),
+                    overlayColor: kGold.withValues(alpha: 0.15),
+                  ),
+                  child: Slider(
+                    value: svc.position,
+                    onChanged: svc.moving ? null : (v) => svc.moveTo(v),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _PanelButton(
+                        label: 'Open',
+                        color: const Color(0xFF2A2925),
+                        textColor: const Color(0xFFEFE9E0),
+                        onTap: svc.moving ? null : svc.openFull,
+                        icon: Icons.open_in_full,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _PanelButton(
+                        label: 'Close',
+                        color: kGold,
+                        textColor: const Color(0xFF1A1917),
+                        onTap: svc.moving ? null : svc.closeFull,
+                        icon: Icons.close_fullscreen,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _PanelButton(
+                        label: 'Stop',
+                        color: const Color(0xFF2A2925),
+                        textColor: const Color(0xFFEFE9E0),
+                        onTap: svc.stop,
+                        icon: Icons.stop,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _PanelButton(
+                        label: 'Home',
+                        color: const Color(0xFF2A2925),
+                        textColor: const Color(0xFFEFE9E0),
+                        onTap: svc.moving ? null : svc.home,
+                        icon: Icons.home_outlined,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: svc.disconnect,
+                  child: Center(
+                    child: Text('Disconnect',
+                        style: kLabel(11, color: const Color(0xFF8D857A), tracking: 0.04)),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _statusLabel(GripperState s) {
+    switch (s) {
+      case GripperState.disconnected: return 'Not connected';
+      case GripperState.scanning:     return 'Scanning for gripper...';
+      case GripperState.connecting:   return 'Connecting...';
+      case GripperState.connected:    return 'Connected';
+    }
+  }
+}
+
+class _PanelButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color textColor;
+  final VoidCallback? onTap;
+  final IconData? icon;
+  const _PanelButton({
+    required this.label,
+    required this.color,
+    required this.textColor,
+    required this.onTap,
+    this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: enabled ? color : color.withValues(alpha: 0.4),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 13, color: enabled ? textColor : textColor.withValues(alpha: 0.4)),
+              const SizedBox(width: 4),
+            ],
+            Text(label,
+                style: kLabel(11,
+                    color: enabled ? textColor : textColor.withValues(alpha: 0.4),
+                    tracking: 0.06)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _PermissionDeniedView extends StatelessWidget {
   const _PermissionDeniedView();

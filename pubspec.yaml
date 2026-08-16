@@ -38,6 +38,9 @@ dependencies:
   # Barcode scanning for individual book mode (ISBN / EAN-13)
   mobile_scanner: ^5.2.3
 
+  # BLE communication with the ShelfScan gripper (ESP32 servo controller)
+  flutter_blue_plus: ^1.35.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

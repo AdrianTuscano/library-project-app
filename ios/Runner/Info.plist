@@ -26,6 +26,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>ShelfScan uses Bluetooth to control the book gripper.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used to scan book spines for cataloging.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
