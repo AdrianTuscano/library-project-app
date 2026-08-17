@@ -28,12 +28,9 @@ class CameraScreen extends StatefulWidget {
 
 class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
   CameraController? _controller;
-  MobileScannerController? _barcodeController;
   _PermState _permState = _PermState.checking;
   String? _cameraError;
   bool _isCapturing = false;
-  bool _barcodeScanned = false;
-  bool _isSwitchingMode = false;
   bool _showGripperPanel = false;
   _ScanMode _mode = _ScanMode.shelf;
 
@@ -52,43 +49,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   // ── Mode switching ────────────────────────────────────────────────────────
 
-  Future<void> _switchMode(_ScanMode mode) async {
-    if (_mode == mode || _isSwitchingMode || _isCapturing) return;
-    _isSwitchingMode = true;
-    try {
-    if (mode == _ScanMode.book) {
-      // Hand camera to MobileScanner — dispose CameraController first.
-      await _controller?.dispose();
-      _controller = null;
-      _barcodeController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.normal,
-        facing: CameraFacing.back,
-      );
-    } else {
-      await _barcodeController?.dispose();
-      _barcodeController = null;
-      await _initCamera();
-    }
-    if (mounted) setState(() { _mode = mode; _barcodeScanned = false; });
-    } finally {
-      _isSwitchingMode = false;
-    }
-  }
-
-  void _onBarcodeDetected(BarcodeCapture capture) {
-    if (_barcodeScanned || !mounted) return;
-    final raw = capture.barcodes
-        .where((b) => b.rawValue != null)
-        .map((b) => b.rawValue!)
-        .firstOrNull;
-    if (raw == null) return;
-    _barcodeScanned = true;
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => BookScanScreen(isbn: raw)),
-    ).then((_) {
-      if (mounted) setState(() => _barcodeScanned = false);
-    });
+  void _switchMode(_ScanMode mode) {
+    if (_mode == mode || _isCapturing) return;
+    setState(() => _mode = mode);
   }
 
   @override
@@ -96,7 +59,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     VolumeShutterService.instance.clearRootAction();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
-    _barcodeController?.dispose();
     super.dispose();
   }
 
@@ -214,6 +176,46 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
+  Future<void> _captureBook() async {
+    if (!mounted) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized || _isCapturing) return;
+    setState(() => _isCapturing = true);
+    try {
+      await controller.setFlashMode(FlashMode.torch);
+      final XFile imageFile = await controller.takePicture();
+      await controller.setFlashMode(FlashMode.off);
+
+      final scanner = MobileScannerController();
+      final result = await scanner.analyzeImage(imageFile.path);
+      await scanner.dispose();
+      File(imageFile.path).delete().ignore();
+
+      if (!mounted) return;
+      final isbn = result?.barcodes
+          .where((b) => b.rawValue != null)
+          .map((b) => b.rawValue!)
+          .firstOrNull;
+
+      if (isbn == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No barcode found — try holding steadier or closer')),
+        );
+        return;
+      }
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => BookScanScreen(isbn: isbn)));
+    } catch (e) {
+      try { await _controller?.setFlashMode(FlashMode.off); } catch (_) {}
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Scan failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isCapturing = false);
+    }
+  }
+
   /// Fallback OCR when no Anthropic key is set (Cloud Vision → on-device ML Kit).
   Future<OcrResult> _runFallbackOcr(String path) async {
     if (kCloudVisionApiKey.isNotEmpty) {
@@ -282,23 +284,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       body: SizedBox.expand(
         child: Stack(
           children: [
-            // ── Camera / barcode feed ────────────────────────────────────────
-            if (_mode == _ScanMode.shelf) ...[
-              if (controller != null && controller.value.isInitialized)
-                _CameraFramePreview(controller: controller)
-              else
-                const Center(child: CircularProgressIndicator(color: kGold)),
-              const _GuideOverlay(mode: _ScanMode.shelf),
-            ] else ...[
-              if (_barcodeController != null)
-                MobileScanner(
-                  controller: _barcodeController!,
-                  onDetect: _onBarcodeDetected,
-                )
-              else
-                const Center(child: CircularProgressIndicator(color: kGold)),
-              const _GuideOverlay(mode: _ScanMode.book),
-            ],
+            // ── Camera feed (same widget for both modes) ─────────────────────
+            if (controller != null && controller.value.isInitialized)
+              _CameraFramePreview(controller: controller)
+            else
+              const Center(child: CircularProgressIndicator(color: kGold)),
+            const _GuideOverlay(),
 
             // ── Instruction text ─────────────────────────────────────────────
             Positioned(
@@ -309,23 +300,24 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
                 child: Text(
                   _mode == _ScanMode.shelf
                       ? 'Fill the frame with one row of spines'
-                      : 'Point at the ISBN barcode on the book',
+                      : 'Point the barcode at the frame and tap',
                   style: kLabel(12, color: const Color(0xFFCFC7BB)),
                 ),
               ),
             ),
 
-            // ── Shutter button (shelf mode only) ─────────────────────────────
-            if (_mode == _ScanMode.shelf)
-              Positioned(
-                bottom: pad.bottom + 16,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: _ShutterButton(
-                      isCapturing: _isCapturing, onTap: _capture),
+            // ── Shutter button ────────────────────────────────────────────────
+            Positioned(
+              bottom: pad.bottom + 16,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _ShutterButton(
+                  isCapturing: _isCapturing,
+                  onTap: _mode == _ScanMode.shelf ? _capture : _captureBook,
                 ),
               ),
+            ),
 
             // ── Mode switcher pill ────────────────────────────────────────────
             Positioned(
@@ -367,10 +359,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
 enum _PermState { checking, granted, denied }
 
-// Guide frame: darkened vignette outside the scan rectangle + gold border.
+// Guide frame: darkened vignette outside the scan strip + gold border.
 class _GuideOverlay extends StatelessWidget {
-  final _ScanMode mode;
-  const _GuideOverlay({required this.mode});
+  const _GuideOverlay();
 
   @override
   Widget build(BuildContext context) {
@@ -378,26 +369,14 @@ class _GuideOverlay extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
-
-        final double left, top, right, bottom;
-
-        if (mode == _ScanMode.shelf) {
-          // Wide landscape strip — full row of spines
-          left   = w * 0.065;
-          top    = h * 0.185;
-          right  = w * 0.065;
-          bottom = h * 0.265;
-        } else {
-          // Wide short rectangle — ISBN / EAN-13 barcode in landscape
-          left   = w * 0.15;
-          top    = h * 0.30;
-          right  = w * 0.15;
-          bottom = h * 0.30;
-        }
-
         return CustomPaint(
           size: Size(w, h),
-          painter: _GuidePainter(left: left, top: top, right: right, bottom: bottom),
+          painter: _GuidePainter(
+            left:   w * 0.065,
+            top:    h * 0.185,
+            right:  w * 0.065,
+            bottom: h * 0.265,
+          ),
         );
       },
     );
@@ -661,56 +640,14 @@ class _GripperPanel extends StatelessWidget {
                 ),
               ] else ...[
                 // ── Connected controls ─────────────────────────────────────
-                Text('Grip', style: kLabel(11, color: const Color(0xFF8D857A), tracking: 0.06)),
-                const SizedBox(height: 4),
-                _GripSlider(svc: svc),
+                _GripHoldControl(svc: svc),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _PanelButton(
-                        label: 'Open',
-                        color: const Color(0xFF2A2925),
-                        textColor: const Color(0xFFEFE9E0),
-                        onTap: svc.moving ? null : svc.openFull,
-                        icon: Icons.open_in_full,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _PanelButton(
-                        label: 'Close',
-                        color: kGold,
-                        textColor: const Color(0xFF1A1917),
-                        onTap: svc.moving ? null : svc.closeFull,
-                        icon: Icons.close_fullscreen,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _PanelButton(
-                        label: 'Stop',
-                        color: const Color(0xFF2A2925),
-                        textColor: const Color(0xFFEFE9E0),
-                        onTap: svc.stop,
-                        icon: Icons.stop,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _PanelButton(
-                        label: 'Home',
-                        color: const Color(0xFF2A2925),
-                        textColor: const Color(0xFFEFE9E0),
-                        onTap: svc.moving ? null : svc.home,
-                        icon: Icons.home_outlined,
-                      ),
-                    ),
-                  ],
+                _PanelButton(
+                  label: 'Home (full open)',
+                  color: const Color(0xFF2A2925),
+                  textColor: const Color(0xFFEFE9E0),
+                  onTap: svc.moving ? null : svc.home,
+                  icon: Icons.home_outlined,
                 ),
                 const SizedBox(height: 12),
                 GestureDetector(
@@ -738,41 +675,135 @@ class _GripperPanel extends StatelessWidget {
   }
 }
 
-// Slider that only sends a BLE command when the user lifts their finger,
-// so we don't flood the ESP32 with writes on every drag pixel.
-class _GripSlider extends StatefulWidget {
+// Press-and-hold grip control. Left = open, right = close.
+// Servo runs while finger is down; stops immediately on lift.
+class _GripHoldControl extends StatelessWidget {
   final BleGripperService svc;
-  const _GripSlider({required this.svc});
-
-  @override
-  State<_GripSlider> createState() => _GripSliderState();
-}
-
-class _GripSliderState extends State<_GripSlider> {
-  double? _dragging; // local value while finger is down; null = use svc.position
+  const _GripHoldControl({required this.svc});
 
   @override
   Widget build(BuildContext context) {
-    final value = _dragging ?? widget.svc.position;
-    return SliderTheme(
-      data: SliderThemeData(
-        trackHeight: 3,
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-        activeTrackColor: kGold,
-        inactiveTrackColor: const Color(0xFF3A3835),
-        thumbColor: const Color(0xFFEFE9E0),
-        overlayColor: kGold.withValues(alpha: 0.15),
-      ),
-      child: Slider(
-        value: value,
-        onChanged: widget.svc.moving
-            ? null
-            : (v) => setState(() => _dragging = v),
-        onChangeEnd: (v) {
-          setState(() => _dragging = null);
-          widget.svc.moveTo(v);
-        },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Hold to move', style: kLabel(11, color: const Color(0xFF8D857A), tracking: 0.06)),
+        const SizedBox(height: 6),
+        // Position bar
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: SizedBox(
+            height: 4,
+            child: LayoutBuilder(builder: (context, c) {
+              return Stack(children: [
+                Container(color: const Color(0xFF2A2925)),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 33),
+                  width: c.maxWidth * svc.position,
+                  color: kGold,
+                ),
+              ]);
+            }),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Open', style: kLabel(9, color: const Color(0xFF6B6560))),
+            Text('Closed', style: kLabel(9, color: const Color(0xFF6B6560))),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // Hold buttons
+        Row(children: [
+          Expanded(child: _HoldButton(
+            label: 'OPEN',
+            icon: Icons.chevron_left,
+            onStart: () => svc.startMove(0),
+            onEnd: svc.stopMove,
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: _HoldButton(
+            label: 'CLOSE',
+            icon: Icons.chevron_right,
+            iconOnRight: true,
+            color: kGold,
+            textColor: const Color(0xFF1A1917),
+            onStart: () => svc.startMove(1),
+            onEnd: svc.stopMove,
+          )),
+        ]),
+      ],
+    );
+  }
+}
+
+class _HoldButton extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final bool iconOnRight;
+  final Color color;
+  final Color textColor;
+  final VoidCallback onStart;
+  final Future<void> Function() onEnd;
+
+  const _HoldButton({
+    required this.label,
+    required this.icon,
+    this.iconOnRight = false,
+    this.color = const Color(0xFF2A2925),
+    this.textColor = const Color(0xFFEFE9E0),
+    required this.onStart,
+    required this.onEnd,
+  });
+
+  @override
+  State<_HoldButton> createState() => _HoldButtonState();
+}
+
+class _HoldButtonState extends State<_HoldButton> {
+  bool _pressed = false;
+
+  void _down() {
+    setState(() => _pressed = true);
+    widget.onStart();
+  }
+
+  void _up() {
+    if (!_pressed) return;
+    setState(() => _pressed = false);
+    widget.onEnd();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (_) => _down(),
+      onPointerUp: (_) => _up(),
+      onPointerCancel: (_) => _up(),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 80),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: _pressed
+              ? widget.color.withValues(alpha: 0.7)
+              : widget.color,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: widget.iconOnRight
+              ? [
+                  Text(widget.label, style: kLabel(11, color: widget.textColor, tracking: 0.06)),
+                  const SizedBox(width: 2),
+                  Icon(widget.icon, size: 16, color: widget.textColor),
+                ]
+              : [
+                  Icon(widget.icon, size: 16, color: widget.textColor),
+                  const SizedBox(width: 2),
+                  Text(widget.label, style: kLabel(11, color: widget.textColor, tracking: 0.06)),
+                ],
+        ),
       ),
     );
   }

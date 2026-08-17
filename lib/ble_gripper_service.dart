@@ -125,40 +125,62 @@ class BleGripperService extends ChangeNotifier {
 
   // ── Movement ────────────────────────────────────────────────────────────────
 
-  /// Move gripper to [target] (0.0 = open, 1.0 = closed).
+  Timer? _positionTicker;
+
+  /// Begin continuous move: dir 0 = open, 1 = close.
+  /// Call [stopMove] when the user lifts their finger.
+  void startMove(int dir) {
+    if (!connected || _char == null) return;
+    _moving = true;
+    // Send a long-duration timed move; we'll stop it manually.
+    _write('T${dir}9999');
+    // Update position locally at ~30 fps so the indicator stays live.
+    _positionTicker?.cancel();
+    _positionTicker = Timer.periodic(const Duration(milliseconds: 33), (_) {
+      final delta = 33 / _fullTravelMs;
+      _position = (dir == 1
+              ? _position + delta
+              : _position - delta)
+          .clamp(0.0, 1.0);
+      notifyListeners();
+    });
+  }
+
+  Future<void> stopMove() async {
+    _positionTicker?.cancel();
+    _positionTicker = null;
+    _moving = false;
+    if (!connected || _char == null) return;
+    await _write('S');
+    notifyListeners();
+  }
+
+  /// Convenience — run to a target in one shot (used by Home).
   Future<void> moveTo(double target) async {
     if (!connected || _char == null || _moving) return;
     target = target.clamp(0.0, 1.0);
-
     final delta = target - _position;
     if (delta.abs() < 0.01) return;
-
-    final dir = delta > 0 ? 1 : 0;          // 1 = close, 0 = open
+    final dir = delta > 0 ? 1 : 0;
     final ms  = (delta.abs() * _fullTravelMs).round().clamp(1, 9999);
-
     _moving = true;
     notifyListeners();
-
     await _write('T$dir$ms');
-
-    // Optimistically update position as the servo moves
     await Future.delayed(Duration(milliseconds: ms));
     _position = target;
     _moving   = false;
     notifyListeners();
   }
 
-  Future<void> openFull()  => moveTo(0.0);
-  Future<void> closeFull() => moveTo(1.0);
-
   Future<void> stop() async {
+    _positionTicker?.cancel();
+    _positionTicker = null;
+    _moving = false;
     if (!connected || _char == null) return;
     await _write('S');
-    _moving = false;
     notifyListeners();
   }
 
-  /// Home: drive open direction for full travel, then reset position to 0.
   Future<void> home() async {
     if (!connected || _char == null) return;
     _moving = true;
@@ -175,7 +197,7 @@ class BleGripperService extends ChangeNotifier {
   Future<void> _write(String cmd) async {
     try {
       final bytes = cmd.codeUnits;
-      await _char!.write(bytes, withoutResponse: true);
+      await _char!.write(bytes, withoutResponse: false);
       debugPrint('[BLE] → $cmd');
     } catch (e) {
       debugPrint('[BLE] write error: $e');
