@@ -38,7 +38,9 @@ abstract class LibraryStatusService {
   Future<LibraryStatus> checkByTitle(String title, String author);
 }
 
-// ── Stub ──────────────────────────────────────────────────────────────────────
+// ── Active instance ───────────────────────────────────────────────────────────
+// Swap to ApolloLibraryStatusService() once the endpoint names are confirmed.
+// See lib/apollo_catalog_service.dart for instructions.
 
 final libraryStatus = StubLibraryStatusService();
 
