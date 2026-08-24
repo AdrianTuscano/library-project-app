@@ -39,8 +39,11 @@ abstract class LibraryStatusService {
 }
 
 // ── Active instance ───────────────────────────────────────────────────────────
-// Swap to ApolloLibraryStatusService() once the endpoint names are confirmed.
-// See lib/apollo_catalog_service.dart for instructions.
+// Stub is active. To switch to the real Georgetown PL catalog:
+//   1. Run: dart run tool/probe_apollo.dart
+//   2. Verify endpoint names and XML fields match apollo_catalog_service.dart
+//   3. Replace the line below with: ApolloLibraryStatusService()
+//   4. Add import 'apollo_catalog_service.dart'; at the top of this file
 
 final libraryStatus = StubLibraryStatusService();
 

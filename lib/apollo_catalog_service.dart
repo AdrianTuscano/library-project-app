@@ -44,31 +44,46 @@ class ApolloLibraryStatusService implements LibraryStatusService {
   // ── Public interface ───────────────────────────────────────────────────────
 
   @override
-  Future<LibraryStatus> checkByIsbn(String isbn) async {
-    try {
-      final session  = await _ensureSession();
-      final biblioId = await _searchIsbn(session, isbn);
-      if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
-      return _fetchHoldings(session, biblioId);
-    } catch (e) {
-      debugPrint('[Apollo] checkByIsbn($isbn): $e');
-      return const LibraryStatus(status: CircStatus.unknown);
-    }
-  }
+  Future<LibraryStatus> checkByIsbn(String isbn) =>
+      _withRetry(() async {
+        final session  = await _ensureSession();
+        final biblioId = await _searchIsbn(session, isbn);
+        if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
+        return _fetchHoldings(session, biblioId);
+      }, tag: 'checkByIsbn($isbn)');
 
   @override
-  Future<LibraryStatus> checkByTitle(String title, String author) async {
-    try {
-      final session  = await _ensureSession();
-      // Try ISBN search first if we accidentally got one, otherwise keyword.
-      final keyword  = [title, author].where((s) => s.isNotEmpty).join(' ');
-      final biblioId = await _searchKeyword(session, keyword);
-      if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
-      return _fetchHoldings(session, biblioId);
-    } catch (e) {
-      debugPrint('[Apollo] checkByTitle("$title"): $e');
-      return const LibraryStatus(status: CircStatus.unknown);
+  Future<LibraryStatus> checkByTitle(String title, String author) =>
+      _withRetry(() async {
+        final session = await _ensureSession();
+        final keyword = [title, author].where((s) => s.isNotEmpty).join(' ');
+        final biblioId = await _searchKeyword(session, keyword);
+        if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
+        return _fetchHoldings(session, biblioId);
+      }, tag: 'checkByTitle("$title")');
+
+  // Retries once on session-expired errors, falls back to unknown on all others.
+  Future<LibraryStatus> _withRetry(
+    Future<LibraryStatus> Function() fn, {
+    required String tag,
+  }) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await fn();
+      } on StateError catch (e) {
+        if (e.message.contains('session expired') && attempt == 0) {
+          debugPrint('[Apollo] $tag: session expired, refreshing…');
+          _clearSession();
+          continue; // retry with fresh session
+        }
+        debugPrint('[Apollo] $tag: $e');
+        return const LibraryStatus(status: CircStatus.unknown);
+      } catch (e) {
+        debugPrint('[Apollo] $tag: $e');
+        return const LibraryStatus(status: CircStatus.unknown);
+      }
     }
+    return const LibraryStatus(status: CircStatus.unknown);
   }
 
   void dispose() => _client.close();
