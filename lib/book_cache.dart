@@ -30,11 +30,8 @@ class BookCache {
     debugPrint('[BookCache] opened at ${join(dbPath, _dbName)}');
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // Key: sort + lowercase the noise-filtered words so minor OCR
-  // variations across scans of the same book still hit the cache.
-  // ──────────────────────────────────────────────────────────────
-  String _key(List<String> texts) {
+  // Sort + lowercase so minor OCR variations across scans still hit the same key.
+  String _cacheKey(List<String> texts) {
     final tokens = texts
         .map((t) => t.toLowerCase().trim())
         .where((t) => t.isNotEmpty)
@@ -55,7 +52,7 @@ class BookCache {
       final rows = await db.query(
         _table,
         where: 'cache_key = ? AND cached_at > ?',
-        whereArgs: [_key(texts), cutoff],
+        whereArgs: [_cacheKey(texts), cutoff],
         limit: 1,
       );
       if (rows.isEmpty) return null;
@@ -77,7 +74,6 @@ class BookCache {
     }
   }
 
-  /// Wipe every cached result. Used during testing to avoid stale lookups.
   Future<void> clear() async {
     final db = _db;
     if (db == null) return;
@@ -97,7 +93,7 @@ class BookCache {
       await db.insert(
         _table,
         {
-          'cache_key': _key(texts),
+          'cache_key': _cacheKey(texts),
           'title': result.title,
           'author': result.author,
           'pub_year': result.firstPublishYear,

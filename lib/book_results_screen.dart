@@ -5,10 +5,6 @@ import 'design.dart';
 import 'library_status_service.dart';
 import 'shelf_sort_view.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sort helpers (used by ShelfSortScreen too, so kept here as package utilities)
-// ─────────────────────────────────────────────────────────────────────────────
-
 String lastName(String author) {
   final parts = author.trim().split(RegExp(r'\s+'));
   return parts.isEmpty ? '' : parts.last.toUpperCase();
@@ -22,10 +18,6 @@ double? deweyValue(String? callNumber) {
 }
 
 bool isNonFiction(BookResult b) => deweyValue(b.callNumber) != null;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Screen
-// ─────────────────────────────────────────────────────────────────────────────
 
 class BookResultsScreen extends StatefulWidget {
   final Future<ScanResult> resultsFuture;
@@ -42,10 +34,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   int _selected = 0;
   int _revealed = 0;
 
-  // position → LibraryStatus, populated async after books are identified
   final Map<int, LibraryStatus> _statuses = {};
 
-  // Fixed placeholder bars shown during processing animation
   static const _placeholders = [
     (w: 30.0, h: 152.0, c: Color(0xFF5C5348)),
     (w: 26.0, h: 170.0, c: Color(0xFF7D5411)),
@@ -66,7 +56,6 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   }
 
   void _startLoading() {
-    // Reveal placeholder bars one by one
     Future.microtask(() async {
       for (var i = 1; i <= _placeholders.length; i++) {
         await Future.delayed(const Duration(milliseconds: 160));
@@ -109,57 +98,53 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
     return _buildShelf(_result!.books);
   }
 
-  // ── Processing ──────────────────────────────────────────────────────────────
-
   Widget _buildProcessing() {
     final rev = _revealed;
     final total = _placeholders.length;
-    final matching = rev >= total;
+    final allRevealed = rev >= total;
 
     return Scaffold(
       backgroundColor: kBgDark,
       body: SafeArea(
         child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 180,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  for (var i = 0; i < total; i++)
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      margin: const EdgeInsets.only(right: 6),
-                      width: _placeholders[i].w,
-                      height: _placeholders[i].h,
-                      color: i < rev
-                          ? _placeholders[i].c
-                          : const Color(0xFF26241F),
-                    ),
-                ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: 180,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < total; i++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.only(right: 6),
+                        width: _placeholders[i].w,
+                        height: _placeholders[i].h,
+                        color: i < rev
+                            ? _placeholders[i].c
+                            : const Color(0xFF26241F),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              matching ? 'Identifying books' : 'Reading spines',
-              style: kHeading(24, color: const Color(0xFFEFE9E0)),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              matching ? 'Matching titles and authors…' : 'Scanning your shelf…',
-              style: kLabel(12, color: const Color(0xFF8D857A)),
-            ),
-          ],
+              const SizedBox(height: 24),
+              Text(
+                allRevealed ? 'Identifying books' : 'Reading spines',
+                style: kHeading(24, color: const Color(0xFFEFE9E0)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                allRevealed ? 'Matching titles and authors…' : 'Scanning your shelf…',
+                style: kLabel(12, color: const Color(0xFF8D857A)),
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
-
-  // ── No books in frame ───────────────────────────────────────────────────────
 
   Widget _buildNoBooks() {
     return Scaffold(
@@ -213,8 +198,6 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
     );
   }
 
-  // ── Shelf ───────────────────────────────────────────────────────────────────
-
   Widget _buildShelf(List<BookResult> books) {
     if (books.isEmpty) {
       return Scaffold(
@@ -228,8 +211,7 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
               Text('Try scanning again with better lighting',
                   style: kBody(14, color: kTextMut)),
               const SizedBox(height: 24),
-              _GoldOutlineButton(
-                  label: 'Back', onTap: () => Navigator.pop(context)),
+              _GoldOutlineButton(label: 'Back', onTap: () => Navigator.pop(context)),
             ],
           ),
         ),
@@ -242,26 +224,26 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
       backgroundColor: kBgScreen,
       body: SafeArea(
         child: Column(
-        children: [
-          _buildNavBar(books),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: _buildSpineArea(books)),
-                Container(
-                  width: 292,
-                  decoration: const BoxDecoration(
-                    color: kBgPanel,
-                    border: Border(left: BorderSide(color: kDivider)),
+          children: [
+            _buildNavBar(books),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: _buildSpineArea(books)),
+                  Container(
+                    width: 292,
+                    decoration: const BoxDecoration(
+                      color: kBgPanel,
+                      border: Border(left: BorderSide(color: kDivider)),
+                    ),
+                    child: _buildDetailPanel(sel),
                   ),
-                  child: _buildDetailPanel(sel),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -290,20 +272,16 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
           GestureDetector(
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) => ShelfSortScreen(books: books),
-              ),
+              MaterialPageRoute(builder: (_) => ShelfSortScreen(books: books)),
             ),
             child: Container(
               margin: const EdgeInsets.only(right: 18),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
               decoration: BoxDecoration(
                 border: Border.all(color: kGold),
                 borderRadius: BorderRadius.circular(3),
               ),
-              child: Text('Check sorting',
-                  style: kLabel(12, color: kGoldText)),
+              child: Text('Check sorting', style: kLabel(12, color: kGoldText)),
             ),
           ),
         ],
@@ -336,12 +314,7 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
             ),
           ),
         ),
-        // Shelf line
-        Container(
-          height: 6,
-          margin: const EdgeInsets.only(right: 0),
-          color: const Color(0xFFD7D3CF),
-        ),
+        Container(height: 6, color: const Color(0xFFD7D3CF)),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 7, 20, 10),
           child: Text('Tap a spine to see the full record.',
@@ -359,10 +332,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'POSITION ${b.position}',
-            style: kLabel(10, color: kTextFaint, tracking: 0.16),
-          ),
+          Text('POSITION ${b.position}',
+              style: kLabel(10, color: kTextFaint, tracking: 0.16)),
           const SizedBox(height: 9),
           Text(b.title, style: kHeading(25)),
           const SizedBox(height: 13),
@@ -381,14 +352,10 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
           _DetailField(
               label: 'MATCH',
               value: b.confidence == 'high' ? 'High confidence' : 'Possible match'),
-
-          // ── Library status ─────────────────────────────────────────────────
           const SizedBox(height: 13),
           const Divider(color: kDivider, height: 1),
           const SizedBox(height: 13),
           _LibraryStatusField(status: status),
-
-          // ── Reshelved alert ────────────────────────────────────────────────
           if (status?.isReshelved == true) ...[
             const SizedBox(height: 10),
             Container(
@@ -404,7 +371,6 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
               ),
             ),
           ],
-
           const Spacer(),
           GestureDetector(
             onTap: () {},
@@ -444,10 +410,6 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Spine bar — a single book spine in the shelf visualization
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _SpineBar extends StatelessWidget {
   final BookResult book;
   final bool selected;
@@ -464,19 +426,19 @@ class _SpineBar extends StatelessWidget {
   int get _w => spineWidth(book.title);
   int get _h => spineHeight(book.title, book.author);
 
-  Color? get _dotColor {
+  Color? get _statusDotColor {
     if (status == null) return null;
     return switch (status!.status) {
-      CircStatus.available   => const Color(0xFF4A7C59),
-      CircStatus.checkedOut  => kRust,
-      CircStatus.unknown     => null,
+      CircStatus.available  => const Color(0xFF4A7C59),
+      CircStatus.checkedOut => kRust,
+      CircStatus.unknown    => null,
     };
   }
 
   @override
   Widget build(BuildContext context) {
     final color = spineColor(book.position);
-    final dot = _dotColor;
+    final dot = _statusDotColor;
     return GestureDetector(
       onTap: onTap,
       child: Stack(
@@ -488,9 +450,7 @@ class _SpineBar extends StatelessWidget {
             margin: const EdgeInsets.only(right: 7),
             decoration: BoxDecoration(
               color: color,
-              border: selected
-                  ? Border.all(color: kGold, width: 1.5)
-                  : null,
+              border: selected ? Border.all(color: kGold, width: 1.5) : null,
             ),
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Center(
@@ -519,7 +479,6 @@ class _SpineBar extends StatelessWidget {
                 ),
               ),
             ),
-          // Pulsing indicator while status is still loading
           if (status == null)
             Positioned(
               top: 5,
@@ -527,9 +486,9 @@ class _SpineBar extends StatelessWidget {
               child: Container(
                 width: 7,
                 height: 7,
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0x40FFFFFF),
+                  color: Color(0x40FFFFFF),
                 ),
               ),
             ),
@@ -538,10 +497,6 @@ class _SpineBar extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared UI fragments
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _DetailField extends StatelessWidget {
   final String label;
@@ -571,7 +526,8 @@ class _LibraryStatusField extends StatelessWidget {
       return Row(
         children: [
           const SizedBox(
-            width: 10, height: 10,
+            width: 10,
+            height: 10,
             child: CircularProgressIndicator(strokeWidth: 1.5, color: kTextFaint),
           ),
           const SizedBox(width: 8),

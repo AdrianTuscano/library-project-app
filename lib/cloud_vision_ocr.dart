@@ -4,23 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'book_scanner.dart';
-import 'ocr_service.dart'; // OcrResult, OcrException
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CloudVisionOcr — Google Cloud Vision text detection
-//
-// DOCUMENT_TEXT_DETECTION handles rotated and dense spine text far better than
-// on-device ML Kit, and returns per-word bounding boxes we can cluster by X
-// directly — so no multi-orientation trickery is needed here.
-//
-// The image is downscaled before upload to keep the request small and fast.
-// ─────────────────────────────────────────────────────────────────────────────
+import 'ocr_service.dart';
 
 class CloudVisionOcr {
   final String apiKey;
   CloudVisionOcr({required this.apiKey});
 
-  static const int maxDimension = 2200; // longest side, px, before upload
+  static const int maxDimension = 2200;
 
   Future<OcrResult> recognize(String imagePath) async {
     final b64 = await compute(_encodeForUpload, imagePath);
@@ -79,9 +69,8 @@ class CloudVisionOcr {
       return const OcrResult(words: [], rotationUsed: 'cloud', rawText: '');
     }
 
-    // Index 0 is the aggregate full-text block; individual words follow.
-    final fullText =
-        (annotations.first as Map)['description'] as String? ?? '';
+    // Index 0 is the full-document aggregate; per-word entries follow.
+    final fullText = (annotations.first as Map)['description'] as String? ?? '';
 
     final words = <ScanWord>[];
     for (var i = 1; i < annotations.length; i++) {
@@ -100,7 +89,7 @@ class CloudVisionOcr {
         }
       }
       if (n == 0) continue;
-      // Vision returns words in reading order; keep that as the order index.
+      // Vision returns words in reading order; preserve that as the sort index.
       words.add(ScanWord(text: text, centerX: sumX / n, order: words.length));
     }
 
@@ -109,8 +98,6 @@ class CloudVisionOcr {
   }
 }
 
-// ─── Runs in a background isolate (top-level for `compute`) ──────────────────
-// Downscales the captured frame and returns base64 JPEG for upload.
 String _encodeForUpload(String path) {
   try {
     final decoded = img.decodeImage(File(path).readAsBytesSync());

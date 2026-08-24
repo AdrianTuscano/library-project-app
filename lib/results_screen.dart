@@ -66,7 +66,6 @@ class _BlockTile extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Block header: index + bounding box.
         Row(
           children: [
             Container(
@@ -89,12 +88,10 @@ class _BlockTile extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 6),
-        // Full block text.
         Text(
           text,
           style: const TextStyle(color: Colors.white, fontSize: 15),
         ),
-        // Per-line detail.
         if (lines.length > 1) ...[
           const SizedBox(height: 6),
           ...lines.map((line) {
