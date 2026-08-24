@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'library_status_service.dart';
@@ -7,31 +8,37 @@ import 'library_status_service.dart';
 // ApolloLibraryStatusService
 //
 // Talks to Georgetown PL's Biblionix Apollo catalog via the same internal
-// ajax_backend endpoints the web frontend uses. This is NOT an official API —
-// it is the JS app's own backend, reverse-engineered from browser traffic.
+// ajax_backend endpoints the web frontend uses. Reverse-engineered from
+// browser traffic and verified against live responses (2026-07).
 //
-// HOW TO VERIFY / UPDATE ENDPOINT NAMES
-// ──────────────────────────────────────
-// 1. Open https://catalog.georgetowntexas.gov in Chrome
-// 2. DevTools → Network tab → filter by "ajax_backend"
-// 3. Do a search and check the request names/params that appear
-// 4. Look at the XML responses to confirm field names
+// VERIFIED four-step flow:
 //
-// The three-step flow:
-//   Step 1 — GET session_nonlogin.xml.pl  → <session>TOKEN</session>
-//   Step 2 — GET search.xml.pl?session=...&type=isbn&q=...
-//                              OR type=keyword&q=...
-//             → first <biblio_id> in results
-//   Step 3 — GET biblio_extras.xml.pl?session=...&biblio_id=...
-//             → <item> elements with <status> and <due_date>
+//   Step 1 — GET session_nonlogin.xml.pl
+//             → <root session="TOKEN" …/>   (attribute, not child element)
 //
-// All errors fall through to CircStatus.unknown so the app degrades
-// gracefully if the endpoint changes or the network is unavailable.
+//   Step 2a — GET search_setup.xml.pl?session=S&search=keyword:QUERY
+//                                             OR search=isbn:ISBN
+//              → <root search_id="N">…</root>   (integer attribute)
+//
+//   Step 2b — POST perform_search.xml.pl
+//              body: {"search_id":N,"catalog_version":"2026-01-16.01","biblios_only":true}
+//              → <root><biblio id="N"/><biblio id="N"/>…</root>
+//
+//   Step 3  — GET biblio_info.xml.pl?session=S&biblio=N
+//              → rich XML with <holding> elements, one per physical copy:
+//                <holding … available="1|0" return_date="YYYY-MM-DD|" call="JF WHIT" …/>
+//
+// NOTE: biblio_extras.xml.pl always returns HTTP 500 for Georgetown
+//       (data_provider="unbound"). Do NOT call it.
+//
+// catalog_version string is baked into Apollo's JS bundle. If searches start
+// returning 0 results, re-scrape the bundle for a newer value.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ApolloLibraryStatusService implements LibraryStatusService {
   static const _base    = 'https://catalog.georgetowntexas.gov';
   static const _backend = '$_base/catalog/ajax_backend';
+  static const _catalogVersion = '2026-01-16.01';
 
   // Session tokens last ~30 min on Apollo; we refresh 5 min early.
   static const _sessionTtl = Duration(minutes: 25);
@@ -47,7 +54,7 @@ class ApolloLibraryStatusService implements LibraryStatusService {
   Future<LibraryStatus> checkByIsbn(String isbn) =>
       _withRetry(() async {
         final session  = await _ensureSession();
-        final biblioId = await _searchIsbn(session, isbn);
+        final biblioId = await _search(session, 'isbn', isbn);
         if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
         return _fetchHoldings(session, biblioId);
       }, tag: 'checkByIsbn($isbn)');
@@ -55,9 +62,9 @@ class ApolloLibraryStatusService implements LibraryStatusService {
   @override
   Future<LibraryStatus> checkByTitle(String title, String author) =>
       _withRetry(() async {
-        final session = await _ensureSession();
-        final keyword = [title, author].where((s) => s.isNotEmpty).join(' ');
-        final biblioId = await _searchKeyword(session, keyword);
+        final session  = await _ensureSession();
+        final keyword  = [title, author].where((s) => s.isNotEmpty).join(' ');
+        final biblioId = await _search(session, 'keyword', keyword);
         if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
         return _fetchHoldings(session, biblioId);
       }, tag: 'checkByTitle("$title")');
@@ -74,7 +81,7 @@ class ApolloLibraryStatusService implements LibraryStatusService {
         if (e.message.contains('session expired') && attempt == 0) {
           debugPrint('[Apollo] $tag: session expired, refreshing…');
           _clearSession();
-          continue; // retry with fresh session
+          continue;
         }
         debugPrint('[Apollo] $tag: $e');
         return const LibraryStatus(status: CircStatus.unknown);
@@ -97,15 +104,13 @@ class ApolloLibraryStatusService implements LibraryStatusService {
       return _session!;
     }
 
-    // Apollo accepts GET for the guest session endpoint.
-    // Observed URL: /catalog/ajax_backend/session_nonlogin.xml.pl
     final resp = await _client
         .get(Uri.parse('$_backend/session_nonlogin.xml.pl'))
         .timeout(_timeout);
+    _requireOk(resp, 'session_nonlogin');
 
-    _requireStatus(resp, 'session');
-
-    final token = _xml(resp.body, 'session') ?? _xml(resp.body, 'sessionid');
+    // Token is an XML attribute: <root session="TOKEN" …/>
+    final token = _attr(resp.body, 'session');
     if (token == null || token.isEmpty) {
       throw StateError('session_nonlogin returned no token:\n${resp.body}');
     }
@@ -116,127 +121,139 @@ class ApolloLibraryStatusService implements LibraryStatusService {
     return token;
   }
 
-  // ── Step 2: Search ─────────────────────────────────────────────────────────
-
-  Future<String?> _searchIsbn(String session, String isbn) async {
-    return _search(session, 'isbn', isbn);
-  }
-
-  Future<String?> _searchKeyword(String session, String keyword) async {
-    return _search(session, 'keyword', keyword);
-  }
+  // ── Step 2: Two-step search → biblio id ───────────────────────────────────
 
   Future<String?> _search(String session, String type, String q) async {
-    // Observed URL pattern (verify in DevTools):
-    //   /catalog/ajax_backend/search.xml.pl
-    //   ?session=TOKEN&type=isbn&q=9780062409850
-    final uri = Uri.parse('$_backend/search.xml.pl').replace(
-      queryParameters: {'session': session, 'type': type, 'q': q},
+    // 2a: search_setup → search_id
+    final setupUri = Uri.parse('$_backend/search_setup.xml.pl').replace(
+      queryParameters: {'session': session, 'search': '$type:$q'},
     );
-
-    final resp = await _client.get(uri).timeout(_timeout);
-    if (resp.statusCode == 401) {
-      // Session expired mid-flight — clear and let caller retry once.
+    final setupResp = await _client.get(setupUri).timeout(_timeout);
+    if (setupResp.statusCode == 401) {
       _clearSession();
-      throw StateError('session expired during search');
+      throw StateError('session expired during search_setup');
     }
-    _requireStatus(resp, 'search');
+    _requireOk(setupResp, 'search_setup');
 
-    // Apollo returns a list of results; take the first biblio_id.
-    // XML may use biblio_id or biblioId depending on version.
-    final id = _xml(resp.body, 'biblio_id') ?? _xml(resp.body, 'biblioId');
-    if (id == null) debugPrint('[Apollo] search($type, $q): no results');
-    return id;
+    final searchIdStr = _attr(setupResp.body, 'search_id');
+    final searchId    = int.tryParse(searchIdStr ?? '');
+    if (searchId == null || searchId == 0) {
+      debugPrint('[Apollo] search($type, $q): no search_id');
+      return null;
+    }
+
+    // 2b: perform_search → first biblio id
+    final body = jsonEncode({
+      'search_id':       searchId,
+      'catalog_version': _catalogVersion,
+      'biblios_only':    true,
+    });
+    final performResp = await _client.post(
+      Uri.parse('$_backend/perform_search.xml.pl'),
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    ).timeout(_timeout);
+    if (performResp.statusCode == 401) {
+      _clearSession();
+      throw StateError('session expired during perform_search');
+    }
+    _requireOk(performResp, 'perform_search');
+
+    final m = RegExp(r'<biblio\s+id="(\d+)"', caseSensitive: false)
+        .firstMatch(performResp.body);
+    if (m == null) {
+      debugPrint('[Apollo] search($type, $q): no results');
+      return null;
+    }
+    return m.group(1);
   }
 
-  // ── Step 3: Holdings ───────────────────────────────────────────────────────
+  // ── Step 3: biblio_info → holdings ────────────────────────────────────────
 
   Future<LibraryStatus> _fetchHoldings(String session, String biblioId) async {
-    // Observed URL pattern:
-    //   /catalog/ajax_backend/biblio_extras.xml.pl
-    //   ?session=TOKEN&biblio_id=12345
-    final uri = Uri.parse('$_backend/biblio_extras.xml.pl').replace(
-      queryParameters: {'session': session, 'biblio_id': biblioId},
+    final uri = Uri.parse('$_backend/biblio_info.xml.pl').replace(
+      queryParameters: {'session': session, 'biblio': biblioId},
     );
-
     final resp = await _client.get(uri).timeout(_timeout);
     if (resp.statusCode == 401) {
       _clearSession();
-      throw StateError('session expired during biblio_extras');
+      throw StateError('session expired during biblio_info');
     }
-    _requireStatus(resp, 'biblio_extras');
-
+    _requireOk(resp, 'biblio_info');
     return _parseHoldings(resp.body);
   }
 
   // ── XML → LibraryStatus ────────────────────────────────────────────────────
 
   LibraryStatus _parseHoldings(String xml) {
-    // biblio_extras returns one <item> block per physical copy, e.g.:
+    // biblio_info returns one <holding> element per physical copy, e.g.:
     //
-    //   <item>
-    //     <barcode>31762000123456</barcode>
-    //     <call_number>J FIC SMI</call_number>
-    //     <status>Available</status>        <!-- or "Checked Out" -->
-    //     <due_date>2026-09-10</due_date>   <!-- present when checked out -->
-    //     <location>Children's</location>
-    //   </item>
-    //
-    // Field names and status strings are guesses — verify against live XML.
+    //   <holding id="591525140"
+    //            available="1"          ← 1=on shelf, 0=not available
+    //            return_date=""         ← ISO date when checked out, else ""
+    //            call="JF WHIT"        ← call number
+    //            location_printable="1st Floor Children's Room — JF WHIT"
+    //            branch_printable="Georgetown"
+    //            …/>
 
-    final callNumber = _xml(xml, 'call_number') ?? _xml(xml, 'callNumber');
+    // Call number from first holding, fall back to shelf_location attribute.
+    final callNumber =
+        _attr(xml, 'call') ??
+        _attr(xml, 'call_printable');
 
-    // Walk through every <status> value in the response.
-    final statusTags = _xmlAll(xml, 'status');
+    // Walk every <holding> and collect available flags + return dates.
+    final holdings = RegExp(
+      r'<holding\b([^>]+)>',
+      caseSensitive: false,
+    ).allMatches(xml).map((m) => m.group(1) ?? '').toList();
 
-    // If any copy is explicitly available, report it.
-    final anyAvailable = statusTags.any((s) =>
-        s.toLowerCase().contains('available') &&
-        !s.toLowerCase().contains('not'));
+    if (holdings.isEmpty) {
+      return LibraryStatus(status: CircStatus.unknown, callNumber: callNumber);
+    }
+
+    // Any copy with available="1" → report available immediately.
+    final anyAvailable = holdings.any((h) => _attrIn(h, 'available') == '1');
     if (anyAvailable) {
       return LibraryStatus(status: CircStatus.available, callNumber: callNumber);
     }
 
-    // All copies checked out — grab the earliest due date.
-    final anyCheckedOut = statusTags.any((s) =>
-        s.toLowerCase().contains('checked') ||
-        s.toLowerCase().contains('out'));
-    if (anyCheckedOut) {
-      final rawDue = _xml(xml, 'due_date') ?? _xml(xml, 'dueDate');
-      final dueDate = _formatDue(rawDue);
-      return LibraryStatus(
-        status: CircStatus.checkedOut,
-        callNumber: callNumber,
-        dueDate: dueDate,
-      );
+    // All copies unavailable — find earliest non-empty return_date.
+    String? earliestDue;
+    for (final h in holdings) {
+      final raw = _attrIn(h, 'return_date');
+      if (raw != null && raw.isNotEmpty) {
+        if (earliestDue == null || raw.compareTo(earliestDue) < 0) {
+          earliestDue = raw;
+        }
+      }
     }
 
-    return LibraryStatus(status: CircStatus.unknown, callNumber: callNumber);
+    // available="0" with no return_date could be lost, in-transit, etc.
+    // Still treat as checked-out since the book is not on the shelf.
+    return LibraryStatus(
+      status: CircStatus.checkedOut,
+      callNumber: callNumber,
+      dueDate: _formatDue(earliestDue),
+    );
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  // Extracts the text content of the first matching XML tag (case-insensitive).
-  static String? _xml(String xml, String tag) {
-    final m = RegExp(
-      '<$tag[^>]*>([^<]+)</$tag>',
-      caseSensitive: false,
-    ).firstMatch(xml);
+  // Extracts an XML attribute from the full document: attr="VALUE"
+  static String? _attr(String xml, String attr) {
+    final m = RegExp('\\b$attr="([^"]*)"', caseSensitive: false).firstMatch(xml);
     return m?.group(1)?.trim();
   }
 
-  // Extracts ALL occurrences of a tag's text content.
-  static List<String> _xmlAll(String xml, String tag) {
-    return RegExp('<$tag[^>]*>([^<]+)</$tag>', caseSensitive: false)
-        .allMatches(xml)
-        .map((m) => m.group(1)?.trim() ?? '')
-        .where((s) => s.isNotEmpty)
-        .toList();
+  // Extracts an attribute from a single tag's attribute string snippet.
+  static String? _attrIn(String attrs, String attr) {
+    final m = RegExp('\\b$attr="([^"]*)"', caseSensitive: false).firstMatch(attrs);
+    return m?.group(1);
   }
 
-  // Formats an ISO due-date string (2026-09-10) to "Sep 10".
+  // Formats an ISO due-date string (YYYY-MM-DD) to "Sep 10".
   static String? _formatDue(String? raw) {
-    if (raw == null) return null;
+    if (raw == null || raw.isEmpty) return null;
     try {
       final d = DateTime.parse(raw.trim());
       const months = [
@@ -245,11 +262,11 @@ class ApolloLibraryStatusService implements LibraryStatusService {
       ];
       return '${months[d.month]} ${d.day}';
     } catch (_) {
-      return raw; // Return as-is if format is unexpected.
+      return raw;
     }
   }
 
-  void _requireStatus(http.Response resp, String label) {
+  void _requireOk(http.Response resp, String label) {
     if (resp.statusCode != 200) {
       throw StateError('$label returned HTTP ${resp.statusCode}');
     }
