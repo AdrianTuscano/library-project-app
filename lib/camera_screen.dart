@@ -14,9 +14,11 @@ import 'ocr_config.dart';
 import 'ocr_service.dart';
 import 'volume_shutter_service.dart';
 
-const double _kGapThreshold = 100; // only used by fallback OCR path
+const double _fallbackGapThreshold = 100;
 
 enum _ScanMode { shelf, book }
+
+enum _PermState { checking, granted, denied }
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -35,58 +37,12 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   bool _isSwitchingMode = false;
   _ScanMode _mode = _ScanMode.shelf;
 
-  // Volume button and selfie-stick shutter are handled by VolumeShutterService
-  // (a singleton that lives for the app lifetime). CameraScreen only registers
-  // its capture action as the "root" handler — the service decides whether to
-  // pop a screen or capture based on the current navigator state.
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     VolumeShutterService.instance.setRootAction(_capture);
     _checkPermission();
-  }
-
-  // ── Mode switching ────────────────────────────────────────────────────────
-
-  Future<void> _switchMode(_ScanMode mode) async {
-    if (_mode == mode || _isSwitchingMode || _isCapturing) return;
-    _isSwitchingMode = true;
-    try {
-    if (mode == _ScanMode.book) {
-      // Hand camera to MobileScanner — dispose CameraController first.
-      await _controller?.dispose();
-      _controller = null;
-      _barcodeController = MobileScannerController(
-        detectionSpeed: DetectionSpeed.normal,
-        facing: CameraFacing.back,
-      );
-    } else {
-      await _barcodeController?.dispose();
-      _barcodeController = null;
-      await _initCamera();
-    }
-    if (mounted) setState(() { _mode = mode; _barcodeScanned = false; });
-    } finally {
-      _isSwitchingMode = false;
-    }
-  }
-
-  void _onBarcodeDetected(BarcodeCapture capture) {
-    if (_barcodeScanned || !mounted) return;
-    final raw = capture.barcodes
-        .where((b) => b.rawValue != null)
-        .map((b) => b.rawValue!)
-        .firstOrNull;
-    if (raw == null) return;
-    _barcodeScanned = true;
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => BookScanScreen(isbn: raw)),
-    ).then((_) {
-      if (mounted) setState(() => _barcodeScanned = false);
-    });
   }
 
   @override
@@ -146,12 +102,50 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
+  Future<void> _switchMode(_ScanMode mode) async {
+    if (_mode == mode || _isSwitchingMode || _isCapturing) return;
+    _isSwitchingMode = true;
+    try {
+      if (mode == _ScanMode.book) {
+        await _controller?.dispose();
+        _controller = null;
+        _barcodeController = MobileScannerController(
+          detectionSpeed: DetectionSpeed.normal,
+          facing: CameraFacing.back,
+        );
+      } else {
+        await _barcodeController?.dispose();
+        _barcodeController = null;
+        await _initCamera();
+      }
+      if (mounted) setState(() { _mode = mode; _barcodeScanned = false; });
+    } finally {
+      _isSwitchingMode = false;
+    }
+  }
+
+  void _onBarcodeDetected(BarcodeCapture capture) {
+    if (_barcodeScanned || !mounted) return;
+    final raw = capture.barcodes
+        .where((b) => b.rawValue != null)
+        .map((b) => b.rawValue!)
+        .firstOrNull;
+    if (raw == null) return;
+    _barcodeScanned = true;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BookScanScreen(isbn: raw)),
+    ).then((_) {
+      if (mounted) setState(() => _barcodeScanned = false);
+    });
+  }
+
   Future<void> _capture() async {
     if (!mounted) return;
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized || _isCapturing) return;
 
-    final frac = visibleCropFractions(
+    final cropFractions = visibleCropFractions(
       screenAspect: MediaQuery.of(context).size.aspectRatio,
       previewAspect: controller.value.aspectRatio,
     );
@@ -159,46 +153,22 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
     try {
       await controller.setFlashMode(FlashMode.torch);
-      final XFile imageFile = await controller.takePicture();
+      final photo = await controller.takePicture();
       await controller.setFlashMode(FlashMode.off);
 
-      final scanPath = await cropToVisibleRegion(imageFile.path, frac.w, frac.h);
+      final croppedPath = await cropToVisibleRegion(photo.path, cropFractions.w, cropFractions.h);
+      final scanFuture = await _buildScanFuture(croppedPath);
+      if (scanFuture == null) return;
 
-      Future<ScanResult> resultsFuture;
-
-      if (kAnthropicApiKey.isNotEmpty) {
-        // Claude end-to-end: identifies books directly from the photo.
-        // No Open Library / Google Books needed.
-        resultsFuture = ClaudeOcr(apiKey: kAnthropicApiKey).scan(scanPath);
-      } else {
-        // Fallback: Cloud Vision or on-device OCR → Open Library lookup.
-        final ocr = await _runFallbackOcr(scanPath);
-        if (ocr.words.isEmpty) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No text detected — try better lighting or hold steadier')),
-          );
-          return;
-        }
-        resultsFuture = BookScanner().scanBooks(
-          ocr.words,
-          gapThreshold: _kGapThreshold,
-          statusSource: const MockLibraryStatusSource(),
-        );
-      }
-
-      // Clean up temp files after kicking off the future (not blocking nav).
-      resultsFuture.whenComplete(() {
-        File(imageFile.path).delete().ignore();
-        if (scanPath != imageFile.path) File(scanPath).delete().ignore();
+      scanFuture.whenComplete(() {
+        File(photo.path).delete().ignore();
+        if (croppedPath != photo.path) File(croppedPath).delete().ignore();
       });
 
       if (!mounted) return;
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => BookResultsScreen(resultsFuture: resultsFuture),
-        ),
+        MaterialPageRoute(builder: (_) => BookResultsScreen(resultsFuture: scanFuture)),
       );
     } catch (e) {
       try { await _controller?.setFlashMode(FlashMode.off); } catch (_) {}
@@ -212,64 +182,51 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     }
   }
 
-  /// Fallback OCR when no Anthropic key is set (Cloud Vision → on-device ML Kit).
-  Future<OcrResult> _runFallbackOcr(String path) async {
+  Future<Future<ScanResult>?> _buildScanFuture(String imagePath) async {
+    if (kAnthropicApiKey.isNotEmpty) {
+      return ClaudeOcr(apiKey: kAnthropicApiKey).scan(imagePath);
+    }
+    final ocr = await _ocrFallback(imagePath);
+    if (ocr.words.isEmpty) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No text detected — try better lighting or hold steadier')),
+      );
+      return null;
+    }
+    return BookScanner().scanBooks(
+      ocr.words,
+      gapThreshold: _fallbackGapThreshold,
+      statusSource: const MockLibraryStatusSource(),
+    );
+  }
+
+  Future<OcrResult> _ocrFallback(String imagePath) async {
     if (kCloudVisionApiKey.isNotEmpty) {
       try {
-        return await CloudVisionOcr(apiKey: kCloudVisionApiKey).recognize(path);
+        return await CloudVisionOcr(apiKey: kCloudVisionApiKey).recognize(imagePath);
       } catch (e) {
         debugPrint('[CameraScreen] Cloud Vision failed, using on-device: $e');
       }
     }
-    return OcrService().recognize(path);
+    return OcrService().recognize(imagePath);
   }
 
   @override
   Widget build(BuildContext context) {
     if (_permState == _PermState.checking) {
-      return Scaffold(
-        backgroundColor: kBgDark,
-        body: const Center(child: CircularProgressIndicator(color: kGold)),
-      );
+      return const _LoadingView();
     }
     if (_permState == _PermState.denied) {
       return const _PermissionDeniedView();
     }
     if (_cameraError != null) {
-      return Scaffold(
-        backgroundColor: kBgDark,
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Camera error', style: kHeading(22, color: const Color(0xFFEFE9E0))),
-              const SizedBox(height: 10),
-              Text(_cameraError!, style: kBody(13, color: const Color(0xFF8D857A)),
-                  textAlign: TextAlign.center),
-            ],
-          ),
-        ),
-      );
+      return _CameraErrorView(message: _cameraError!);
     }
 
-    // Show rotate prompt if the phone hasn't gone landscape yet.
     final size = MediaQuery.of(context).size;
     if (size.width < size.height) {
-      return Scaffold(
-        backgroundColor: kBgDark,
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.screen_rotation, color: kGold, size: 48),
-              const SizedBox(height: 16),
-              Text('Rotate your phone', style: kHeading(22, color: const Color(0xFFEFE9E0))),
-              const SizedBox(height: 8),
-              Text('ShelfScan works in landscape mode', style: kLabel(13, color: const Color(0xFF8D857A))),
-            ],
-          ),
-        ),
-      );
+      return const _RotatePromptView();
     }
 
     final pad = MediaQuery.of(context).padding;
@@ -280,72 +237,63 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       body: SizedBox.expand(
         child: Stack(
           children: [
-            // ── Camera / barcode feed ────────────────────────────────────────
-            if (_mode == _ScanMode.shelf) ...[
-              if (controller != null && controller.value.isInitialized)
-                _CameraFramePreview(controller: controller)
-              else
-                const Center(child: CircularProgressIndicator(color: kGold)),
-              const _GuideOverlay(mode: _ScanMode.shelf),
-            ] else ...[
-              if (_barcodeController != null)
-                MobileScanner(
-                  controller: _barcodeController!,
-                  onDetect: _onBarcodeDetected,
-                )
-              else
-                const Center(child: CircularProgressIndicator(color: kGold)),
-              const _GuideOverlay(mode: _ScanMode.book),
-            ],
-
-            // ── Instruction text ─────────────────────────────────────────────
-            Positioned(
-              top: pad.top + 12,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Text(
-                  _mode == _ScanMode.shelf
-                      ? 'Fill the frame with one row of spines'
-                      : 'Point at the ISBN barcode on the book',
-                  style: kLabel(12, color: const Color(0xFFCFC7BB)),
-                ),
-              ),
-            ),
-
-            // ── Shutter button (shelf mode only) ─────────────────────────────
-            if (_mode == _ScanMode.shelf)
-              Positioned(
-                bottom: pad.bottom + 16,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: _ShutterButton(
-                      isCapturing: _isCapturing, onTap: _capture),
-                ),
-              ),
-
-            // ── Mode switcher pill ────────────────────────────────────────────
-            Positioned(
-              bottom: pad.bottom + 14,
-              right: 28,
-              child: _ModeSwitcher(
-                current: _mode,
-                onSwitch: _switchMode,
-              ),
-            ),
+            _cameraFeed(controller),
+            _GuideOverlay(mode: _mode),
+            _instructionLabel(pad),
+            if (_mode == _ScanMode.shelf) _shutterButton(pad),
+            _modeSwitcher(pad),
           ],
         ),
       ),
     );
   }
+
+  Widget _cameraFeed(CameraController? controller) {
+    if (_mode == _ScanMode.shelf) {
+      if (controller != null && controller.value.isInitialized) {
+        return _CameraFramePreview(controller: controller);
+      }
+      return const Center(child: CircularProgressIndicator(color: kGold));
+    }
+    if (_barcodeController != null) {
+      return MobileScanner(
+        controller: _barcodeController!,
+        onDetect: _onBarcodeDetected,
+      );
+    }
+    return const Center(child: CircularProgressIndicator(color: kGold));
+  }
+
+  Widget _instructionLabel(EdgeInsets pad) => Positioned(
+    top: pad.top + 12,
+    left: 0,
+    right: 0,
+    child: Center(
+      child: Text(
+        _mode == _ScanMode.shelf
+            ? 'Fill the frame with one row of spines'
+            : 'Point at the ISBN barcode on the book',
+        style: kLabel(12, color: const Color(0xFFCFC7BB)),
+      ),
+    ),
+  );
+
+  Widget _shutterButton(EdgeInsets pad) => Positioned(
+    bottom: pad.bottom + 16,
+    left: 0,
+    right: 0,
+    child: Center(
+      child: _ShutterButton(isCapturing: _isCapturing, onTap: _capture),
+    ),
+  );
+
+  Widget _modeSwitcher(EdgeInsets pad) => Positioned(
+    bottom: pad.bottom + 14,
+    right: 28,
+    child: _ModeSwitcher(current: _mode, onSwitch: _switchMode),
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-enum _PermState { checking, granted, denied }
-
-// Guide frame: darkened vignette outside the scan rectangle + gold border.
 class _GuideOverlay extends StatelessWidget {
   final _ScanMode mode;
   const _GuideOverlay({required this.mode});
@@ -356,29 +304,20 @@ class _GuideOverlay extends StatelessWidget {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
-
-        final double left, top, right, bottom;
-
-        if (mode == _ScanMode.shelf) {
-          // Wide landscape strip — full row of spines
-          left   = w * 0.065;
-          top    = h * 0.185;
-          right  = w * 0.065;
-          bottom = h * 0.265;
-        } else {
-          // Wide short rectangle — ISBN / EAN-13 barcode in landscape
-          left   = w * 0.15;
-          top    = h * 0.30;
-          right  = w * 0.15;
-          bottom = h * 0.30;
-        }
-
+        final (left, top, right, bottom) = _insets(w, h);
         return CustomPaint(
           size: Size(w, h),
           painter: _GuidePainter(left: left, top: top, right: right, bottom: bottom),
         );
       },
     );
+  }
+
+  (double, double, double, double) _insets(double w, double h) {
+    if (mode == _ScanMode.shelf) {
+      return (w * 0.065, h * 0.185, w * 0.065, h * 0.265);
+    }
+    return (w * 0.15, h * 0.30, w * 0.15, h * 0.30);
   }
 }
 
@@ -391,10 +330,9 @@ class _GuidePainter extends CustomPainter {
     final outer = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
     final inner = Path()..addRect(
         Rect.fromLTRB(left, top, size.width - right, size.height - bottom));
-    final vignette = Path.combine(PathOperation.difference, outer, inner);
+    final cutout = Path.combine(PathOperation.difference, outer, inner);
 
-    canvas.drawPath(vignette, Paint()..color = kBgDark.withValues(alpha: 0.4));
-
+    canvas.drawPath(cutout, Paint()..color = kBgDark.withValues(alpha: 0.4));
     canvas.drawRect(
       Rect.fromLTRB(left, top, size.width - right, size.height - bottom),
       Paint()
@@ -409,7 +347,6 @@ class _GuidePainter extends CustomPainter {
       old.left != left || old.top != top || old.right != right || old.bottom != bottom;
 }
 
-// Full-bleed camera preview — matches what gets scanned.
 class _CameraFramePreview extends StatelessWidget {
   final CameraController controller;
   const _CameraFramePreview({required this.controller});
@@ -462,7 +399,6 @@ class _ShutterButton extends StatelessWidget {
   }
 }
 
-// Mode switcher pill — lives in the bottom-right corner of the camera view.
 class _ModeSwitcher extends StatelessWidget {
   final _ScanMode current;
   final void Function(_ScanMode) onSwitch;
@@ -516,6 +452,58 @@ class _Pill extends StatelessWidget {
       ),
     );
   }
+}
+
+class _LoadingView extends StatelessWidget {
+  const _LoadingView();
+
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+    backgroundColor: kBgDark,
+    body: Center(child: CircularProgressIndicator(color: kGold)),
+  );
+}
+
+class _CameraErrorView extends StatelessWidget {
+  final String message;
+  const _CameraErrorView({required this.message});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: kBgDark,
+    body: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Camera error', style: kHeading(22, color: const Color(0xFFEFE9E0))),
+          const SizedBox(height: 10),
+          Text(message, style: kBody(13, color: const Color(0xFF8D857A)),
+              textAlign: TextAlign.center),
+        ],
+      ),
+    ),
+  );
+}
+
+class _RotatePromptView extends StatelessWidget {
+  const _RotatePromptView();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: kBgDark,
+    body: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.screen_rotation, color: kGold, size: 48),
+          const SizedBox(height: 16),
+          Text('Rotate your phone', style: kHeading(22, color: const Color(0xFFEFE9E0))),
+          const SizedBox(height: 8),
+          Text('ShelfScan works in landscape mode', style: kLabel(13, color: const Color(0xFF8D857A))),
+        ],
+      ),
+    ),
+  );
 }
 
 class _PermissionDeniedView extends StatelessWidget {
