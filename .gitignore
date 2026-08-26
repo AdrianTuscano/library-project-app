@@ -46,3 +46,4 @@ app.*.map.json
 
 # Local secrets — keep the .example, ignore any ocr_secrets variant
 lib/ocr_secrets*.dart
+test_images/
