@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'nav.dart';
 
@@ -32,9 +33,22 @@ class VolumeShutterService {
   void _onVolumeChange(double _) {
     if (_resettingVolume) return;
     _resettingVolume = true;
-    VolumeController().setVolume(_savedVolume);
+    _restoreVolume();
     Future.delayed(const Duration(milliseconds: 400), () => _resettingVolume = false);
     _handlePress();
+  }
+
+  // volume_controller's iOS setVolume force-unwraps
+  //   UIApplication.shared.delegate!.window!?.rootViewController!
+  // whenever showSystemUI is false. Any nil there is a Swift trap that kills the
+  // process outright — no Dart try/catch can intercept it. The audio-session KVO
+  // fires even when we're backgrounded, which is exactly when those are nil, so
+  // gate on lifecycle: skip the restore rather than risk the trap.
+  void _restoreVolume() {
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    try {
+      VolumeController().setVolume(_savedVolume);
+    } catch (_) {}
   }
 
   bool _onKeyEvent(KeyEvent event) {

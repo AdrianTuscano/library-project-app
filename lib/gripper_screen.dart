@@ -123,7 +123,7 @@ class _GripperScreenState extends State<GripperScreen> {
         foregroundColor: isDisconnected ? kGold : kRust,
       ),
       child: Text(
-        isDisconnected ? 'Connect' : (isBusy ? 'Cancel' : 'Disconnect'),
+        isBusy ? 'Searching…' : (isDisconnected ? 'Connect' : 'Disconnect'),
         style: kLabel(13),
       ),
     );
