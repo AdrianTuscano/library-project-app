@@ -6,7 +6,6 @@ import 'book_cache.dart';
 import 'camera_screen.dart';
 import 'design.dart';
 import 'nav.dart';
-import 'volume_shutter_service.dart';
 
 List<CameraDescription> cameras = [];
 final bookCache = BookCache();
@@ -21,7 +20,6 @@ Future<void> main() async {
   }
   await bookCache.init();
   if (kDebugMode) await bookCache.clear();
-  VolumeShutterService.instance.init();
   runApp(const ShelfScanApp());
 }
 

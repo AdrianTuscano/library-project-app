@@ -3,18 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'ble_gripper_service.dart';
 import 'book_results_screen.dart';
 import 'book_scan_screen.dart';
 import 'book_scanner.dart';
 import 'claude_ocr.dart';
 import 'cloud_vision_ocr.dart';
 import 'design.dart';
-import 'gripper_screen.dart';
 import 'main.dart';
 import 'ocr_config.dart';
 import 'ocr_service.dart';
-import 'volume_shutter_service.dart';
 
 const double _fallbackGapThreshold = 100;
 
@@ -43,13 +40,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    VolumeShutterService.instance.setRootAction(_capture);
     _checkPermission();
   }
 
   @override
   void dispose() {
-    VolumeShutterService.instance.clearRootAction();
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     _barcodeController?.dispose();
@@ -244,7 +239,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
             _instructionLabel(pad),
             if (_mode == _ScanMode.shelf) _shutterButton(pad),
             _modeSwitcher(pad),
-            _gripperNavButton(pad),
           ],
         ),
       ),
@@ -296,50 +290,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     child: _ModeSwitcher(current: _mode, onSwitch: _switchMode),
   );
 
-  Widget _gripperNavButton(EdgeInsets pad) => Positioned(
-    bottom: pad.bottom + 14,
-    left: 28,
-    child: ListenableBuilder(
-      listenable: BleGripperService.instance,
-      builder: (_, __) {
-        final connected = BleGripperService.instance.connected;
-        return GestureDetector(
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const GripperScreen()),
-          ),
-          child: Container(
-            width: 44, height: 44,
-            decoration: BoxDecoration(
-              color: kBgDark.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: connected ? kGold : const Color(0xFF3A3837),
-                width: 1.5,
-              ),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Icon(Icons.bluetooth, color: connected ? kGold : kTextFaint, size: 20),
-                if (connected)
-                  Positioned(
-                    top: 8, right: 8,
-                    child: Container(
-                      width: 7, height: 7,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF4CAF50),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    ),
-  );
 }
 
 class _GuideOverlay extends StatelessWidget {
