@@ -7,19 +7,10 @@ import 'package:image/image.dart' as img;
 import 'book_scanner.dart';
 import 'ocr_service.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ClaudeOcr — end-to-end book identification from a shelf photo.
-//
-// Claude reads the image AND identifies every book in one API call.
-// The response is parsed directly into BookResult objects — no Open Library,
-// no Google Books, no extra clustering step needed.
-// ─────────────────────────────────────────────────────────────────────────────
+const _maxImageDim = 2000;
+const _noBooksFound = 'NO_BOOKS_FOUND';
 
-const _kMaxDim = 2000;
-
-const _kSentinel = 'NO_BOOKS_FOUND';
-
-const _kPrompt = '''
+const _prompt = '''
 You are looking at a photo of a library bookshelf.
 
 First, check: can you clearly see book spines in this image? If the image shows something other than books (a wall, a person, a blurry object, an empty shelf, etc.) or if no spines are legible, respond with exactly:
@@ -52,7 +43,6 @@ Format when no call number visible:   Title — Author
 No commentary, no numbering, no markdown.
 ''';
 
-/// Thrown when Claude explicitly signals no books are visible in the frame.
 class NoBooksFoundException implements Exception {
   const NoBooksFoundException();
   @override
@@ -65,8 +55,6 @@ class ClaudeOcr {
 
   const ClaudeOcr({required this.apiKey, this.model = 'claude-sonnet-4-6'});
 
-  /// Identifies all books in [imagePath] and returns a [ScanResult] directly.
-  /// No external book search APIs are used — Claude is the sole source of truth.
   Future<ScanResult> scan(String imagePath) async {
     final b64 = await compute(_encodeImage, imagePath);
     if (b64.isEmpty) throw const OcrException('Could not encode image for Claude');
@@ -83,7 +71,7 @@ class ClaudeOcr {
               'type': 'image',
               'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': b64},
             },
-            {'type': 'text', 'text': _kPrompt},
+            {'type': 'text', 'text': _prompt},
           ],
         }
       ],
@@ -133,11 +121,8 @@ class ClaudeOcr {
     return ScanResult(books: books, isOffline: false);
   }
 
-  /// Parse "Title — Author [— CALL_NUMBER]" lines into BookResult objects.
-  /// The call number is optional; lines without one still parse correctly.
-  /// Throws [NoBooksFoundException] if Claude returned the sentinel.
   static List<BookResult> _parseBooks(String text) {
-    if (text.contains(_kSentinel)) throw const NoBooksFoundException();
+    if (text.contains(_noBooksFound)) throw const NoBooksFoundException();
 
     final books = <BookResult>[];
     var position = 1;
@@ -155,7 +140,6 @@ class ClaudeOcr {
           final parts = line.split(sep).map((s) => s.trim()).toList();
           title = parts[0];
           author = parts.length > 1 ? parts[1] : '';
-          // Third field (if present) is the call number sticker
           if (parts.length > 2) {
             final raw = parts.sublist(2).join(' ').trim();
             if (raw.isNotEmpty) callNumber = raw;
@@ -179,17 +163,16 @@ class ClaudeOcr {
   }
 }
 
-// Top-level for compute() — encodes and downscales the image in a background isolate.
 String _encodeImage(String path) {
   try {
     final decoded = img.decodeImage(File(path).readAsBytesSync());
     if (decoded == null) return '';
 
     final longest = decoded.width > decoded.height ? decoded.width : decoded.height;
-    final scaled = longest > _kMaxDim
+    final scaled = longest > _maxImageDim
         ? (decoded.width >= decoded.height
-            ? img.copyResize(decoded, width: _kMaxDim)
-            : img.copyResize(decoded, height: _kMaxDim))
+            ? img.copyResize(decoded, width: _maxImageDim)
+            : img.copyResize(decoded, height: _maxImageDim))
         : decoded;
 
     return base64Encode(img.encodeJpg(scaled, quality: 90));

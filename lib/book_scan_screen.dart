@@ -4,13 +4,6 @@ import 'package:http/http.dart' as http;
 import 'design.dart';
 import 'library_status_service.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BookScanScreen — shown after a barcode is detected in Book scan mode.
-//
-// Looks up the ISBN on Open Library (no Claude, no API key), then checks
-// library circulation status via LibraryStatusService.
-// ─────────────────────────────────────────────────────────────────────────────
-
 class BookScanScreen extends StatefulWidget {
   final String isbn;
   const BookScanScreen({super.key, required this.isbn});
@@ -59,16 +52,12 @@ class _BookScanScreenState extends State<BookScanScreen> {
 
   Widget _buildContent() {
     final loading = _info == null || _status == null;
-
     return Column(
       children: [
-        // ── Nav bar ────────────────────────────────────────────────────────
         _NavBar(
           onBack: () => Navigator.pop(context),
           title: loading ? 'Looking up…' : (_info?.title ?? 'Unknown title'),
         ),
-
-        // ── Body ───────────────────────────────────────────────────────────
         Expanded(
           child: loading
               ? const Center(child: CircularProgressIndicator(color: kGold))
@@ -87,12 +76,8 @@ class _BookScanScreenState extends State<BookScanScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Status banner ───────────────────────────────────────────────
           _StatusBanner(status: status),
-
           const SizedBox(height: 24),
-
-          // ── Book details ────────────────────────────────────────────────
           if (info != null) ...[
             Text(info.title,
                 style: kHeading(26, color: const Color(0xFFEFE9E0))),
@@ -116,7 +101,7 @@ class _BookScanScreenState extends State<BookScanScreen> {
               _Field(label: 'CALL NUMBER', value: status.callNumber!),
             ],
           ] else ...[
-            // ISBN found but no Open Library record
+            // No Open Library record for this ISBN.
             Text('ISBN: ${widget.isbn}',
                 style: kLabel(13, color: const Color(0xFF8D857A))),
             const SizedBox(height: 8),
@@ -127,10 +112,7 @@ class _BookScanScreenState extends State<BookScanScreen> {
               _Field(label: 'CALL NUMBER', value: status.callNumber!),
             ],
           ],
-
           const SizedBox(height: 32),
-
-          // ── Reshelved alert ──────────────────────────────────────────────
           if (status.isReshelved)
             Container(
               padding: const EdgeInsets.all(14),
@@ -157,10 +139,7 @@ class _BookScanScreenState extends State<BookScanScreen> {
                 ],
               ),
             ),
-
           const SizedBox(height: 24),
-
-          // ── Scan again ───────────────────────────────────────────────────
           GestureDetector(
             onTap: () => Navigator.pop(context),
             child: Container(
@@ -206,8 +185,6 @@ class _BookScanScreenState extends State<BookScanScreen> {
   }
 }
 
-// ── Open Library lookup ───────────────────────────────────────────────────────
-
 class _BookInfo {
   final String title;
   final String author;
@@ -234,13 +211,10 @@ Future<_BookInfo?> _fetchBookInfo(String isbn) async {
     if (book == null) return null;
 
     final title = book['title'] as String? ?? 'Unknown title';
-
     final authorsList = book['authors'] as List?;
     final author = (authorsList?.first as Map?)?['name'] as String? ?? '';
-
     final publishersList = book['publishers'] as List?;
     final publisher = (publishersList?.first as Map?)?['name'] as String?;
-
     final publishYear = book['publish_date'] as String?;
 
     return _BookInfo(
@@ -253,8 +227,6 @@ Future<_BookInfo?> _fetchBookInfo(String isbn) async {
     return null;
   }
 }
-
-// ── Sub-widgets ───────────────────────────────────────────────────────────────
 
 class _NavBar extends StatelessWidget {
   final VoidCallback onBack;
@@ -337,12 +309,9 @@ class _StatusBanner extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label,
-                  style: kLabel(13,
-                      color: color, tracking: 0.08)),
+              Text(label, style: kLabel(13, color: color, tracking: 0.08)),
               const SizedBox(height: 2),
-              Text(sub,
-                  style: kBody(12, color: const Color(0xFF8D857A))),
+              Text(sub, style: kBody(12, color: const Color(0xFF8D857A))),
             ],
           ),
         ],
@@ -362,8 +331,7 @@ class _Field extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: kLabel(10,
-                color: const Color(0xFF605D5D), tracking: 0.14)),
+            style: kLabel(10, color: const Color(0xFF605D5D), tracking: 0.14)),
         const SizedBox(height: 2),
         Text(value, style: kBody(13.5, color: const Color(0xFFD4CDBF))),
       ],

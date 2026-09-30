@@ -5,14 +5,10 @@ import 'book_results_screen.dart' show lastName, isNonFiction, deweyValue;
 import 'book_scanner.dart';
 import 'design.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sort computation
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _SortItem {
   final BookResult book;
-  final int currentSlot;  // 1-indexed position in scanned order
-  final int? targetSlot;  // 1-indexed, null = remove (non-fiction)
+  final int currentSlot;
+  final int? targetSlot; // null = non-fiction, pull aside
 
   const _SortItem(this.book, this.currentSlot, this.targetSlot);
 
@@ -21,46 +17,29 @@ class _SortItem {
   bool get needsFix => isNF || !inPlace;
 }
 
-// ── Sort key helpers ──────────────────────────────────────────────────────────
-
-/// Primary sort key for a book, using call number sticker when available.
-///
-/// Fiction stickers ("F SMI", "JF ROW") sort by the letter suffix.
-/// Non-fiction stickers (Dewey) sort numerically.
-/// When no sticker is present, fall back to author surname.
 String _sortKey(BookResult b) {
   final cn = b.callNumber?.trim().toUpperCase();
   if (cn != null && cn.isNotEmpty) {
-    // Fiction / juvenile fiction: "F SMI" → use suffix letters as sort key
     final fictionMatch = RegExp(r'^J?F\s+(.+)$').firstMatch(cn);
     if (fictionMatch != null) return fictionMatch.group(1)!;
 
-    // Biography: "B SMI" / "BIO SMI" → suffix letters
     final bioMatch = RegExp(r'^BIO?\s+(.+)$').firstMatch(cn);
     if (bioMatch != null) return bioMatch.group(1)!;
 
-    // Dewey decimal: left-pad integer portion for correct lexicographic order
     final dewey = deweyValue(b.callNumber);
     if (dewey != null) return dewey.toStringAsFixed(4).padLeft(12, '0');
 
-    // Unknown sticker format — use it verbatim
     return cn;
   }
-  // No sticker: fall back to author surname
   return lastName(b.author);
 }
 
-/// True when the book belongs in the non-fiction / pull-aside group.
-/// Prioritises the call number sticker; falls back to heuristic if absent.
 bool _isNonFiction(BookResult b) {
   final cn = b.callNumber?.trim().toUpperCase();
   if (cn != null && cn.isNotEmpty) {
-    // Explicit fiction markers
     if (RegExp(r'^J?F\b').hasMatch(cn)) return false;
-    // Everything else with a sticker (Dewey, BIO, etc.) is non-fiction
     return true;
   }
-  // No sticker — fall back to Dewey heuristic on any existing callNumber
   return isNonFiction(b);
 }
 
@@ -81,10 +60,6 @@ List<_SortItem> _computeSort(List<BookResult> books) {
 
 int _spineW(BookResult b) => spineWidth(b.title);
 int _spineH(BookResult b) => spineHeight(b.title, b.author);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Screen
-// ─────────────────────────────────────────────────────────────────────────────
 
 class ShelfSortScreen extends StatefulWidget {
   final List<BookResult> books;
@@ -111,26 +86,26 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
       backgroundColor: kBgScreen,
       body: SafeArea(
         child: Column(
-        children: [
-          _buildNavBar(fixes.length),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: _buildVisualization()),
-                Container(
-                  width: 292,
-                  decoration: const BoxDecoration(
-                    color: kBgPanel,
-                    border: Border(left: BorderSide(color: kDivider)),
+          children: [
+            _buildNavBar(fixes.length),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: _buildVisualization()),
+                  Container(
+                    width: 292,
+                    decoration: const BoxDecoration(
+                      color: kBgPanel,
+                      border: Border(left: BorderSide(color: kDivider)),
+                    ),
+                    child: _buildActionPanel(fixes),
                   ),
-                  child: _buildActionPanel(fixes),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -160,8 +135,7 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
             padding: const EdgeInsets.only(right: 18),
             child: Text(
               '$fixCount of ${widget.books.length} out of place',
-              style: kLabel(11,
-                  color: fixCount > 0 ? kRust : const Color(0xFF3A6B3A)),
+              style: kLabel(11, color: fixCount > 0 ? kRust : const Color(0xFF3A6B3A)),
             ),
           ),
         ],
@@ -172,20 +146,16 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
   Widget _buildVisualization() {
     if (_items.isEmpty) return const SizedBox.shrink();
 
-    // Compute spine layout
     final widths = _items.map((it) => _spineW(it.book).toDouble()).toList();
     const gap = 7.0;
     const arcZoneH = 88.0;
     const badgeH = 22.0;
-    final maxSpineH = _items
-        .map((it) => _spineH(it.book).toDouble())
-        .fold(0.0, math.max);
+    final maxSpineH = _items.map((it) => _spineH(it.book).toDouble()).fold(0.0, math.max);
     const shelfLineH = 6.0;
     const bottomPad = 10.0;
 
     final totalH = arcZoneH + badgeH + maxSpineH + shelfLineH + bottomPad;
 
-    // x positions (left edge of each spine)
     final xs = <double>[];
     double cx = 0;
     for (final w in widths) {
@@ -194,11 +164,8 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
     }
     final totalW = cx - gap + 20;
 
-    // center x of each spine
     double centerX(int i) => xs[i] + widths[i] / 2;
-    // top y of each spine (relative to start of canvas which is at arcZoneH + badgeH)
-    double spineTopY(int i) =>
-        arcZoneH + badgeH + (maxSpineH - _spineH(_items[i].book));
+    double spineTopY(int i) => arcZoneH + badgeH + (maxSpineH - _spineH(_items[i].book));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -211,7 +178,6 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
             child: Stack(
               clipBehavior: Clip.none,
               children: [
-                // Arc layer
                 Positioned.fill(
                   child: CustomPaint(
                     painter: _ArcPainter(
@@ -221,8 +187,6 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
                     ),
                   ),
                 ),
-
-                // Badges
                 for (var i = 0; i < _items.length; i++)
                   if (_items[i].needsFix)
                     Positioned(
@@ -231,24 +195,17 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
                       width: widths[i],
                       child: _Badge(item: _items[i]),
                     ),
-
-                // Spine bars
                 for (var i = 0; i < _items.length; i++)
                   Positioned(
                     top: spineTopY(i),
                     left: xs[i],
                     child: _SortSpine(item: _items[i]),
                   ),
-
-                // Shelf line
                 Positioned(
                   top: arcZoneH + badgeH + maxSpineH,
                   left: 0,
                   width: math.max(totalW, constraints.maxWidth),
-                  child: Container(
-                    height: shelfLineH,
-                    color: const Color(0xFFD7D3CF),
-                  ),
+                  child: Container(height: shelfLineH, color: const Color(0xFFD7D3CF)),
                 ),
               ],
             ),
@@ -271,14 +228,12 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
           child: fixes.isEmpty
               ? Center(
                   child: Text('All in order',
-                      style: kBody(13, color: kTextFaint,
-                          style: FontStyle.italic)),
+                      style: kBody(13, color: kTextFaint, style: FontStyle.italic)),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   itemCount: fixes.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(color: kDivider, height: 1),
+                  separatorBuilder: (_, __) => const Divider(color: kDivider, height: 1),
                   itemBuilder: (_, i) => _ActionItem(item: fixes[i]),
                 ),
         ),
@@ -286,8 +241,7 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
         Padding(
           padding: const EdgeInsets.all(14),
           child: GestureDetector(
-            onTap: () =>
-                Navigator.popUntil(context, (r) => r.isFirst),
+            onTap: () => Navigator.popUntil(context, (r) => r.isFirst),
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 9),
@@ -305,10 +259,6 @@ class _ShelfSortScreenState extends State<ShelfSortScreen> {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Arc painter — draws arrows above spines for misplaced books
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _ArcPainter extends CustomPainter {
   final List<_SortItem> items;
@@ -328,12 +278,12 @@ class _ArcPainter extends CustomPainter {
       if (!item.needsFix) continue;
 
       final x1 = centerXs[i];
-      final y1 = spineTopYs[i]; // top of current spine
+      final y1 = spineTopYs[i];
 
       if (item.isNF) {
         _drawSectionArrow(canvas, x1, y1);
       } else {
-        final j = item.targetSlot! - 1; // 0-indexed
+        final j = item.targetSlot! - 1;
         if (j < 0 || j >= centerXs.length) continue;
         _drawArc(canvas, x1, y1, centerXs[j], spineTopYs[j]);
       }
@@ -347,20 +297,15 @@ class _ArcPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final y1 = spineTop;
-    final y2 = spineTop - 56;
+    canvas.drawLine(Offset(cx, spineTop), Offset(cx, spineTop - 56), strokePaint);
 
-    canvas.drawLine(Offset(cx, y1), Offset(cx, y2), strokePaint);
-
-    final fillPaint = Paint()
-      ..color = kRust
-      ..style = PaintingStyle.fill;
-    final head = Path()
-      ..moveTo(cx, y2 - 5)
-      ..lineTo(cx - 5, y2 + 6)
-      ..lineTo(cx + 5, y2 + 6)
+    final fillPaint = Paint()..color = kRust..style = PaintingStyle.fill;
+    final arrowHead = Path()
+      ..moveTo(cx, spineTop - 61)
+      ..lineTo(cx - 5, spineTop - 50)
+      ..lineTo(cx + 5, spineTop - 50)
       ..close();
-    canvas.drawPath(head, fillPaint);
+    canvas.drawPath(arrowHead, fillPaint);
   }
 
   void _drawArc(Canvas canvas, double x1, double y1, double x2, double y2) {
@@ -373,31 +318,26 @@ class _ArcPainter extends CustomPainter {
     final dist = (x2 - x1).abs();
     final lift = math.min(40 + dist * 0.09, 78.0);
 
-    final path = Path()
-      ..moveTo(x1, y1)
-      ..cubicTo(x1, y1 - lift, x2, y2 - lift, x2, y2);
-    canvas.drawPath(path, paint);
+    canvas.drawPath(
+      Path()
+        ..moveTo(x1, y1)
+        ..cubicTo(x1, y1 - lift, x2, y2 - lift, x2, y2),
+      paint,
+    );
 
-    // Arrowhead at destination pointing down
-    final fillPaint = Paint()
-      ..color = kGold
-      ..style = PaintingStyle.fill;
-    final head = Path()
+    final fillPaint = Paint()..color = kGold..style = PaintingStyle.fill;
+    final arrowHead = Path()
       ..moveTo(x2, y2 + 5)
       ..lineTo(x2 - 5, y2 - 6)
       ..lineTo(x2 + 5, y2 - 6)
       ..close();
-    canvas.drawPath(head, fillPaint);
+    canvas.drawPath(arrowHead, fillPaint);
   }
 
   @override
   bool shouldRepaint(covariant _ArcPainter old) =>
       old.items != items || old.centerXs != centerXs || old.spineTopYs != spineTopYs;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Spine + badge widgets
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _SortSpine extends StatelessWidget {
   final _SortItem item;
@@ -413,9 +353,7 @@ class _SortSpine extends StatelessWidget {
       height: _spineH(item.book).toDouble(),
       decoration: BoxDecoration(
         color: color,
-        border: borderColor != null
-            ? Border.all(color: borderColor, width: 1.5)
-            : null,
+        border: borderColor != null ? Border.all(color: borderColor, width: 1.5) : null,
       ),
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Center(
@@ -443,17 +381,12 @@ class _Badge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = item.isNF ? kRust : kGold;
-    final text = item.isNF
-        ? 'NON-FICTION'
-        : '→ ${item.targetSlot}';
-
     return Container(
       height: 18,
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: color),
+      decoration: BoxDecoration(color: item.isNF ? kRust : kGold),
       child: Text(
-        text,
+        item.isNF ? 'NON-FICTION' : '→ ${item.targetSlot}',
         style: GoogleFonts.lora(
           fontSize: 8,
           color: Colors.white,
@@ -474,7 +407,7 @@ class _ActionItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = item.isNF ? kRust : kGold;
-    final meta = item.isNF
+    final instruction = item.isNF
         ? 'Non-fiction — reshelve in Dewey section'
         : 'Move from position ${item.currentSlot} → ${item.targetSlot}';
 
@@ -493,14 +426,10 @@ class _ActionItem extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.book.title,
-                  style: kBody(12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(item.book.title,
+                    style: kBody(12), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
-                Text(meta, style: kLabel(10, color: kTextMut)),
+                Text(instruction, style: kLabel(10, color: kTextMut)),
               ],
             ),
           ),
