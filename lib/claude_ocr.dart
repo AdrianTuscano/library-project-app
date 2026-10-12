@@ -3,11 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:image/image.dart' as img;
 import 'book_scanner.dart';
 import 'ocr_service.dart';
 
-const _maxImageDim = 2000;
 const _noBooksFound = 'NO_BOOKS_FOUND';
 
 const _prompt = '''
@@ -55,9 +53,9 @@ class ClaudeOcr {
 
   const ClaudeOcr({required this.apiKey, this.model = 'claude-sonnet-4-6'});
 
-  Future<ScanResult> scan(String imagePath) async {
-    final b64 = await compute(_encodeImage, imagePath);
-    if (b64.isEmpty) throw const OcrException('Could not encode image for Claude');
+  /// [jpeg] should already be cropped and sized by [prepareScanImage].
+  Future<ScanResult> scan(Uint8List jpeg) async {
+    final b64 = base64Encode(jpeg);
 
     final uri = Uri.parse('https://api.anthropic.com/v1/messages');
     final payload = jsonEncode({
@@ -160,24 +158,5 @@ class ClaudeOcr {
       ));
     }
     return books;
-  }
-}
-
-String _encodeImage(String path) {
-  try {
-    final decoded = img.decodeImage(File(path).readAsBytesSync());
-    if (decoded == null) return '';
-
-    final longest = decoded.width > decoded.height ? decoded.width : decoded.height;
-    final scaled = longest > _maxImageDim
-        ? (decoded.width >= decoded.height
-            ? img.copyResize(decoded, width: _maxImageDim)
-            : img.copyResize(decoded, height: _maxImageDim))
-        : decoded;
-
-    return base64Encode(img.encodeJpg(scaled, quality: 90));
-  } catch (e) {
-    debugPrint('[ClaudeOcr] image encode failed: $e');
-    return '';
   }
 }

@@ -1,20 +1,21 @@
-import 'apollo_catalog_service.dart';
+import 'z3950_catalog_service.dart';
 
 enum CircStatus { available, checkedOut, unknown }
 
 class LibraryStatus {
   final CircStatus status;
   final String? callNumber;
-  final String? dueDate; // non-null when checkedOut
 
-  const LibraryStatus({required this.status, this.callNumber, this.dueDate});
+  const LibraryStatus({required this.status, this.callNumber});
 
   bool get isReshelved => status == CircStatus.checkedOut;
 }
 
 abstract class LibraryStatusService {
   Future<LibraryStatus> checkByIsbn(String isbn);
-  Future<LibraryStatus> checkByTitle(String title, String author);
+  /// [callNumber] is the spine sticker text, if OCR read one; used to pick the
+  /// right edition/format among catalog matches.
+  Future<LibraryStatus> checkByTitle(String title, String author, {String? callNumber});
 }
 
-final libraryStatus = ApolloLibraryStatusService();
+final libraryStatus = Z3950LibraryStatusService();

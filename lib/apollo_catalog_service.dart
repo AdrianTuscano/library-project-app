@@ -10,31 +10,37 @@ class ApolloLibraryStatusService implements LibraryStatusService {
   // Apollo sessions last ~30 min; refresh 5 min early to avoid mid-request expiry.
   static const _sessionLifetime = Duration(minutes: 25);
   static const _requestTimeout = Duration(seconds: 12);
+  // Keyword results mix formats (DVD, audiobook, Libby) ahead of the print
+  // book, so we look at the top few and pick one.
+  static const _maxResults = 8;
 
   final _client = http.Client();
   String? _sessionToken;
   DateTime? _sessionExpiresAt;
 
   @override
-  Future<LibraryStatus> checkByIsbn(String isbn) =>
-      _withSessionRetry(() async {
-        final session = await _freshSession();
-        final biblioId = await _findBiblio(session, 'isbn', isbn);
-        if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
-        return _holdingsFor(session, biblioId);
-      });
+  Future<LibraryStatus> checkByIsbn(String isbn) => _lookup('isbn:$isbn');
 
   @override
-  Future<LibraryStatus> checkByTitle(String title, String author) =>
-      _withSessionRetry(() async {
-        final session = await _freshSession();
-        final query = [title, author].where((s) => s.isNotEmpty).join(' ');
-        final biblioId = await _findBiblio(session, 'keyword', query);
-        if (biblioId == null) return const LibraryStatus(status: CircStatus.unknown);
-        return _holdingsFor(session, biblioId);
-      });
+  Future<LibraryStatus> checkByTitle(String title, String author, {String? callNumber}) =>
+      _lookup('keyword:${[title, author].where((s) => s.isNotEmpty).join(' ')}', callNumber);
 
   void dispose() => _client.close();
+
+  /// Full search results already carry each record's format, call number and
+  /// per-copy availability, so a lookup is just search_setup + perform_search.
+  Future<LibraryStatus> _lookup(String search, [String? spineCall]) =>
+      _withSessionRetry(() async {
+        final session = await _freshSession();
+        final searchId = await _setupSearch(session, search);
+        if (searchId == null) return const LibraryStatus(status: CircStatus.unknown);
+        final best = _pickBest(await _performSearch(session, searchId), spineCall);
+        if (best == null) return const LibraryStatus(status: CircStatus.unknown);
+        return LibraryStatus(
+          status: best.copies.contains(true) ? CircStatus.available : CircStatus.checkedOut,
+          callNumber: best.call.isEmpty ? null : best.call,
+        );
+      });
 
   Future<LibraryStatus> _withSessionRetry(Future<LibraryStatus> Function() fn) async {
     for (var attempt = 0; attempt < 2; attempt++) {
@@ -67,15 +73,9 @@ class ApolloLibraryStatusService implements LibraryStatusService {
     return token;
   }
 
-  Future<String?> _findBiblio(String session, String type, String query) async {
-    final searchId = await _setupSearch(session, type, query);
-    if (searchId == null) return null;
-    return _executeSearch(session, searchId);
-  }
-
-  Future<int?> _setupSearch(String session, String type, String query) async {
+  Future<int?> _setupSearch(String session, String search) async {
     final uri = Uri.parse('$_backendUrl/search_setup.xml.pl').replace(
-      queryParameters: {'session': session, 'search': '$type:$query'},
+      queryParameters: {'session': session, 'search': search},
     );
     final resp = await _client.get(uri).timeout(_requestTimeout);
     _checkForExpiry(resp, 'search_setup');
@@ -83,76 +83,73 @@ class ApolloLibraryStatusService implements LibraryStatusService {
     return int.tryParse(_xmlAttr(resp.body, 'search_id') ?? '');
   }
 
-  Future<String?> _executeSearch(String session, int searchId) async {
-    final body = jsonEncode({
-      'search_id': searchId,
-      'catalog_version': _catalogVersion,
-      'biblios_only': true,
-    });
+  Future<List<_Record>> _performSearch(String session, int searchId) async {
     final resp = await _client.post(
       Uri.parse('$_backendUrl/perform_search.xml.pl'),
       headers: {'Content-Type': 'application/json'},
-      body: body,
+      body: jsonEncode({
+        'search_id': searchId,
+        'catalog_version': _catalogVersion,
+        'max_results': _maxResults,
+      }),
     ).timeout(_requestTimeout);
     _checkForExpiry(resp, 'perform_search');
     _assertOk(resp, 'perform_search');
-    return RegExp(r'<biblio\s+id="(\d+)"', caseSensitive: false)
-        .firstMatch(resp.body)
-        ?.group(1);
+    return _parseResults(resp.body);
   }
 
-  Future<LibraryStatus> _holdingsFor(String session, String biblioId) async {
-    final uri = Uri.parse('$_backendUrl/biblio_info.xml.pl').replace(
-      queryParameters: {'session': session, 'biblio': biblioId},
-    );
-    final resp = await _client.get(uri).timeout(_requestTimeout);
-    _checkForExpiry(resp, 'biblio_info');
-    _assertOk(resp, 'biblio_info');
-    return _statusFromHoldings(resp.body);
-  }
+  /// Each result is `<s b=… m="medium" c="call number" …>` followed by its
+  /// holdings as `<h … available="0|1" …>`.
+  static List<_Record> _parseResults(String xml) =>
+      xml.split('<s ').skip(1).map(_parseRecord).toList();
 
-  LibraryStatus _statusFromHoldings(String xml) {
-    final callNumber = _xmlAttr(xml, 'call') ?? _xmlAttr(xml, 'call_printable');
-    final holdingAttrs = RegExp(r'<holding\b([^>]+)>', caseSensitive: false)
-        .allMatches(xml)
-        .map((m) => m.group(1) ?? '')
-        .toList();
-
-    if (holdingAttrs.isEmpty) {
-      return LibraryStatus(status: CircStatus.unknown, callNumber: callNumber);
-    }
-    if (holdingAttrs.any((h) => _xmlAttr(h, 'available') == '1')) {
-      return LibraryStatus(status: CircStatus.available, callNumber: callNumber);
-    }
-
-    // available="0" with no return_date covers lost/in-transit; still not on shelf.
-    final earliestDue = holdingAttrs
-        .map((h) => _xmlAttr(h, 'return_date'))
-        .where((d) => d != null && d.isNotEmpty)
-        .fold<String?>(null, (a, d) => a == null || d!.compareTo(a) < 0 ? d : a);
-
-    return LibraryStatus(
-      status: CircStatus.checkedOut,
-      callNumber: callNumber,
-      dueDate: _formatDueDate(earliestDue),
+  static _Record _parseRecord(String seg) {
+    final end = seg.indexOf('>');
+    final head = end < 0 ? seg : seg.substring(0, end);
+    return _Record(
+      call: _xmlAttr(head, 'c') ?? '',
+      isPrint: (_xmlAttr(head, 'm') ?? '').isEmpty,
+      copies: RegExp(r'<h\b[^>]*\bavailable="([01])"')
+          .allMatches(seg)
+          .map((m) => m.group(1) == '1')
+          .toList(),
     );
   }
+
+  /// Picks the record most likely to be the physical book on the shelf.
+  /// Ties keep catalog relevance order.
+  static _Record? _pickBest(List<_Record> records, String? spineCall) {
+    final spine = _normalizeCall(spineCall);
+    final spinePrefix = spine.split(' ').first;
+    _Record? best;
+    var bestScore = -1;
+    for (final r in records) {
+      // No physical copies (e.g. Libby eBooks/audiobooks) — can't be what was scanned.
+      if (r.copies.isEmpty) continue;
+      // Print books carry no medium; DVDs, CDs, talking books, large print do.
+      var score = r.isPrint ? 2 : 0;
+      final call = _normalizeCall(r.call);
+      if (spine.isNotEmpty && call.isNotEmpty) {
+        if (call.startsWith(spine) || spine.startsWith(call)) {
+          score += 4;
+        } else if (call.split(' ').first == spinePrefix) {
+          score += 3; // same collection (JF, JDVD, LPF…), different cutter
+        }
+      }
+      if (score > bestScore) {
+        best = r;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  static String _normalizeCall(String? call) =>
+      (call ?? '').toUpperCase().replaceAll(RegExp(r'[^A-Z0-9.]+'), ' ').trim();
 
   static String? _xmlAttr(String xml, String attr) {
     final m = RegExp('\\b$attr="([^"]*)"', caseSensitive: false).firstMatch(xml);
     return m?.group(1)?.trim();
-  }
-
-  static String? _formatDueDate(String? isoDate) {
-    if (isoDate == null || isoDate.isEmpty) return null;
-    try {
-      final d = DateTime.parse(isoDate);
-      const months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                           'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${months[d.month]} ${d.day}';
-    } catch (_) {
-      return isoDate;
-    }
   }
 
   void _assertOk(http.Response resp, String endpoint) {
@@ -170,6 +167,13 @@ class ApolloLibraryStatusService implements LibraryStatusService {
     _sessionToken = null;
     _sessionExpiresAt = null;
   }
+}
+
+class _Record {
+  final String call;
+  final bool isPrint;
+  final List<bool> copies; // availability of each physical copy
+  const _Record({required this.call, required this.isPrint, required this.copies});
 }
 
 class _SessionExpired implements Exception {

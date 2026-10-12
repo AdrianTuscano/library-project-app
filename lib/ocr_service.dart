@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show Rect;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
 import 'book_scanner.dart';
@@ -134,48 +135,40 @@ class _Variant {
   });
 }
 
-({double w, double h}) visibleCropFractions({
-  required double screenAspect,
-  required double previewAspect,
-}) {
-  if (screenAspect >= previewAspect) {
-    return (w: 1.0, h: previewAspect / screenAspect);
-  }
-  return (w: screenAspect / previewAspect, h: 1.0);
-}
+/// Claude downsizes anything larger than this on its long edge, so sending
+/// more pixels only costs upload and encode time.
+const kMaxScanImageEdge = 1568;
 
-Future<String> cropToVisibleRegion(
-  String path,
-  double fracW,
-  double fracH,
-) {
-  if (fracW >= 0.999 && fracH >= 0.999) return Future.value(path);
-  return compute(_cropCenter, [path, fracW, fracH]);
-}
+/// Decodes a camera JPEG once, turns it upright, crops it to [region]
+/// (normalized 0–1 image coordinates) and shrinks it to [kMaxScanImageEdge].
+/// Runs off the UI isolate.
+Future<Uint8List> prepareScanImage(String path, Rect region) =>
+    compute(_prepareScanImage, (path, region.left, region.top, region.right, region.bottom));
 
-String _cropCenter(List<dynamic> args) {
-  final path = args[0] as String;
-  final fracW = args[1] as double;
-  final fracH = args[2] as double;
-  try {
-    final decoded = img.decodeImage(File(path).readAsBytesSync());
-    if (decoded == null) return path;
-    // Bake EXIF orientation so pixel coords match what the preview showed.
-    final oriented = img.bakeOrientation(decoded);
+Uint8List _prepareScanImage((String, double, double, double, double) args) {
+  final (path, l, t, r, b) = args;
+  final bytes = File(path).readAsBytesSync();
+  final decoded = img.decodeJpg(bytes);
+  if (decoded == null) return bytes;
+  final upright = img.bakeOrientation(decoded);
 
-    final cw = (oriented.width * fracW).round().clamp(1, oriented.width);
-    final ch = (oriented.height * fracH).round().clamp(1, oriented.height);
-    final x = ((oriented.width - cw) / 2).round();
-    final y = ((oriented.height - ch) / 2).round();
+  final x = (upright.width * l).round().clamp(0, upright.width - 1);
+  final y = (upright.height * t).round().clamp(0, upright.height - 1);
+  final cropped = img.copyCrop(
+    upright,
+    x: x,
+    y: y,
+    width: (upright.width * (r - l)).round().clamp(1, upright.width - x),
+    height: (upright.height * (b - t)).round().clamp(1, upright.height - y),
+  );
 
-    final cropped = img.copyCrop(oriented, x: x, y: y, width: cw, height: ch);
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final out = '${File(path).parent.path}/_scan_crop_$ts.jpg';
-    File(out).writeAsBytesSync(img.encodeJpg(cropped, quality: 92));
-    return out;
-  } catch (_) {
-    return path;
-  }
+  final longest = cropped.width > cropped.height ? cropped.width : cropped.height;
+  final sized = longest <= kMaxScanImageEdge
+      ? cropped
+      : (cropped.width >= cropped.height
+          ? img.copyResize(cropped, width: kMaxScanImageEdge)
+          : img.copyResize(cropped, height: kMaxScanImageEdge));
+  return img.encodeJpg(sized, quality: 85);
 }
 
 Map<String, Object> _prepareRotations(String path) {
