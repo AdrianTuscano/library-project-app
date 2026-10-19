@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Each person has exactly one profile document, users/{their uid}.
+    match /users/{uid} {
+      function signedInAs(id) {
+        return request.auth != null && request.auth.uid == id;
+      }
+
+      function validProfile(d) {
+        return d.keys().hasOnly(['displayName', 'email', 'library', 'shelvesSorted', 'createdAt'])
+          && d.displayName is string
+          && d.displayName.size() > 0
+          && d.displayName.size() <= 60
+          && (!('email' in d) || d.email == request.auth.token.email)
+          && (!('library' in d) || d.library is string)
+          && (!('shelvesSorted' in d) || d.shelvesSorted is int);
+      }
+
+      allow read: if signedInAs(uid);
+      allow create, update: if signedInAs(uid) && validProfile(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

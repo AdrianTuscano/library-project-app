@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+    <color name="bg_dark">#FF100F0E</color>
+    <color name="bg_dark_raised">#FF1C1B19</color>
+    <color name="bg_screen">#FFF3F2F2</color>
+    <color name="bg_panel">#FFEAE9E9</color>
+    <color name="divider">#2E201F1D</color>
+    <color name="text">#FF201F1D</color>
+    <color name="text_mut">#FF4A4745</color>
+    <color name="text_faint">#FF5E5A57</color>
+    <color name="gold">#FFB68235</color>
+    <color name="gold_text">#FF7D5411</color>
+    <color name="gold_light">#FFE2C08A</color>
+    <color name="rust">#FF8C3A2B</color>
+    <color name="green">#FF3F6E4D</color>
+    <color name="non_fiction">#FF3F4A52</color>
+    <color name="on_dark">#FFEFE9E0</color>
+    <color name="on_dark_mut">#FFC4BBAE</color>
+    <color name="shelf_line">#FFCFC9C2</color>
+    <color name="spine_label">#FFF7F2EA</color>
+    <color name="on_gold">#FF1A1917</color>
+
+    <color name="spine_0">#FF5C5348</color>
+    <color name="spine_1">#FF7D5411</color>
+    <color name="spine_2">#FF3F4A52</color>
+    <color name="spine_3">#FF8C3A2B</color>
+    <color name="spine_4">#FF2D2B2B</color>
+    <color name="spine_5">#FF6B6350</color>
+    <color name="spine_6">#FF9B7232</color>
+    <color name="spine_7">#FF4A4740</color>
+</resources>
