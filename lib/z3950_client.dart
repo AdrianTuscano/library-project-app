@@ -9,8 +9,8 @@
 //
 // This is not a general Z39.50 implementation. It builds exactly the PDU
 // shapes this server accepts (byte-for-byte reverse-engineered from a real
-// yaz-client session against the live server — see docs/z3950-notes.md)
-// and only extracts the raw MARC21 record bytes from present responses,
+// yaz-client session against the live server) and only extracts the raw
+// MARC21 record bytes from present responses,
 // rather than fully decoding their BER (which Biblionix sends with
 // indefinite lengths). dart:io's raw Socket is plain TCP — no ATS
 // implications, since that's an HTTP(S)-only restriction.
@@ -33,7 +33,8 @@ const _bib1Oid = [0x2a, 0x86, 0x48, 0xce, 0x13, 0x03, 0x01];
 /// 1.2.840.10003.5.10 — MARC21/USMARC record syntax.
 const _marc21Oid = [0x2a, 0x86, 0x48, 0xce, 0x13, 0x05, 0x0a];
 
-/// BIB-1 use-attribute values (attributeType 1).
+/// BIB-1 use-attribute values. 1003 (Author) isn't core BIB-1 — a
+/// Biblionix-local extension, confirmed empirically, not from a spec.
 const _useIsbn = 7;
 const _useTitle = 4;
 const _useAuthor = 1003;
@@ -170,6 +171,7 @@ class Z3950Client {
       } catch (_) {
         return; // incomplete PDU so far — wait for more bytes
       }
+      if (end > buf.length) return; // header parsed, body not fully in yet
       final pdu = Uint8List.sublistView(buf, 0, end);
       final rest = Uint8List.sublistView(buf, end);
       _incoming.clear();
@@ -192,8 +194,8 @@ class Z3950Client {
         ...ctx(4, [0x00, 0xe9, 0xa2]), // options bitmap (search/present/etc.)
         ...ctx(5, [0x04, 0x00, 0x00, 0x00]), // preferredMessageSize
         ...ctx(6, [0x04, 0x00, 0x00, 0x00]), // exceptionalRecordSize
-        ...ctx(110, utf8.encode('ShelfScan')), // implementationId
-        ...ctx(111, utf8.encode('ShelfScan')), // implementationName
+        ...ctx(110, utf8.encode('ShelverHelper')), // implementationId
+        ...ctx(111, utf8.encode('Shelver Helper')), // implementationName
         ...ctx(112, utf8.encode('1.0')), // implementationVersion
       ], constructed: true);
 

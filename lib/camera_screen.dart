@@ -32,7 +32,8 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
+class _CameraScreenState extends State<CameraScreen>
+    with WidgetsBindingObserver {
   CameraController? _controller;
   // Only used to decode barcodes from a still photo; never starts its own
   // camera, so there's no live per-frame analysis and no camera swap.
@@ -107,8 +108,11 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// a whole shelf row fits without backing away. Pinch zoom covers closer
   /// framing from there, so the lens never has to change.
   CameraDescription _widestBackLens() {
-    final back = cameras.where((c) => c.lensDirection == CameraLensDirection.back);
-    return back.where((c) => c.lensType == CameraLensType.ultraWide).firstOrNull ??
+    final back =
+        cameras.where((c) => c.lensDirection == CameraLensDirection.back);
+    return back
+            .where((c) => c.lensType == CameraLensType.ultraWide)
+            .firstOrNull ??
         back.where((c) => c.lensType == CameraLensType.wide).firstOrNull ??
         back.firstOrNull ??
         cameras.first;
@@ -204,11 +208,13 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       _shutterReadyAt = DateTime.now().add(_shutterCooldown);
       return _captureBarcode();
     }
-    // App Store 5.1.2(i): ask before the first photo goes to a third-party AI.
-    if (kAnthropicApiKey.isNotEmpty && appSettings.aiConsent == null) {
+    // App Store 5.1.2(i): disclose before the first photo goes to a
+    // third-party AI, once, ever — aiConsent itself defaults to true so
+    // Settings shows it on without the user having to flip anything.
+    if (kClaudeProxyUrl.isNotEmpty && !appSettings.aiDisclosureShown) {
       final allowed = await showAiConsentSheet(context);
       if (allowed == null || !mounted) return;
-      appSettings.update(aiConsent: allowed);
+      appSettings.update(aiConsent: allowed, aiDisclosureShown: true);
     }
     _shutterReadyAt = DateTime.now().add(_shutterCooldown);
     return _captureShelf();
@@ -216,37 +222,45 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   Future<void> _captureShelf() async {
     final controller = _controller;
-    if (controller == null || !controller.value.isInitialized || _isCapturing) return;
+    if (controller == null || !controller.value.isInitialized || _isCapturing) {
+      return;
+    }
 
     final size = MediaQuery.sizeOf(context);
     final region = _photoRegion(
-      _guideFrame(size, MediaQuery.paddingOf(context), size.width > size.height, appSettings.showTips),
+      _guideFrame(size, MediaQuery.paddingOf(context), size.width > size.height,
+          appSettings.showTips),
       size,
       controller,
     );
     tapFeedback(strong: true);
     setState(() => _isCapturing = true);
 
+    String? photoPath;
     try {
       final useLight = appSettings.useFlash;
       if (useLight) await controller.setFlashMode(FlashMode.torch);
       final photo = await controller.takePicture();
+      photoPath = photo.path;
       if (useLight) await controller.setFlashMode(FlashMode.off);
 
       final jpeg = await prepareScanImage(photo.path, region);
-      File(photo.path).delete().ignore();
       final scanFuture = await _buildScanFuture(jpeg);
       if (scanFuture == null || !mounted) return;
 
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => BookResultsScreen(resultsFuture: scanFuture)),
+        MaterialPageRoute(
+            builder: (_) => BookResultsScreen(resultsFuture: scanFuture)),
       );
     } catch (e) {
-      try { await controller.setFlashMode(FlashMode.off); } catch (_) {}
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (_) {}
       debugPrint('[CameraScreen] capture error: $e');
       _showMessage('The photo did not work. Please try again.');
     } finally {
+      if (photoPath != null) File(photoPath).delete().ignore();
       if (mounted) setState(() => _isCapturing = false);
     }
   }
@@ -269,14 +283,17 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     // Face ID iPhones never turn the UI upside down, but the photo is still
     // saved upright, so the box lands rotated 180° within it.
     if (controller.value.deviceOrientation == DeviceOrientation.portraitDown) {
-      return Rect.fromLTRB(1 - region.right, 1 - region.bottom, 1 - region.left, 1 - region.top);
+      return Rect.fromLTRB(
+          1 - region.right, 1 - region.bottom, 1 - region.left, 1 - region.top);
     }
     return region;
   }
 
   Future<void> _captureBarcode() async {
     final controller = _controller;
-    if (controller == null || !controller.value.isInitialized || _isCapturing) return;
+    if (controller == null || !controller.value.isInitialized || _isCapturing) {
+      return;
+    }
     tapFeedback(strong: true);
     setState(() => _isCapturing = true);
 
@@ -285,7 +302,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       final photo = await controller.takePicture();
       photoPath = photo.path;
       final capture = await _barcodeDecoder.analyzeImage(photo.path);
-      final rawValues = (capture?.barcodes ?? const []).map((b) => b.rawValue).toList();
+      final rawValues =
+          (capture?.barcodes ?? const []).map((b) => b.rawValue).toList();
       debugPrint('[CameraScreen] decoded barcodes: $rawValues');
       final isbn = _pickIsbn(capture?.barcodes ?? const []);
       debugPrint('[CameraScreen] picked ISBN: $isbn');
@@ -314,7 +332,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         .map((b) => (b.rawValue ?? '').replaceAll(RegExp(r'[^0-9Xx]'), ''))
         .where((v) => v.isNotEmpty)
         .toList();
-    return values.where((v) => RegExp(r'^97[89]\d{10}$').hasMatch(v)).firstOrNull ??
+    return values
+            .where((v) => RegExp(r'^97[89]\d{10}$').hasMatch(v))
+            .firstOrNull ??
         values.where((v) => RegExp(r'^\d{9}[\dXx]$').hasMatch(v)).firstOrNull;
   }
 
@@ -326,15 +346,20 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   }
 
   Future<Future<ScanResult>?> _buildScanFuture(Uint8List jpeg) async {
-    if (kAnthropicApiKey.isNotEmpty && appSettings.aiConsent == true) {
-      return const ClaudeOcr(apiKey: kAnthropicApiKey).scan(jpeg);
+    final consented = appSettings.aiConsent;
+    if (kClaudeProxyUrl.isNotEmpty && consented) {
+      return const ClaudeOcr(
+        proxyUrl: kClaudeProxyUrl,
+        appSecret: kClaudeProxyAppSecret,
+      ).scan(jpeg);
     }
     // The on-device OCR fallbacks read from a file.
-    final file = File('${Directory.systemTemp.path}/shelf_${DateTime.now().millisecondsSinceEpoch}.jpg');
+    final file = File(
+        '${Directory.systemTemp.path}/shelf_${DateTime.now().millisecondsSinceEpoch}.jpg');
     await file.writeAsBytes(jpeg);
     final OcrResult ocr;
     try {
-      ocr = await _ocrFallback(file.path);
+      ocr = await _ocrFallback(file.path, consented: consented);
     } finally {
       file.delete().ignore();
     }
@@ -342,17 +367,18 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
       _showMessage('No words found. Try more light, and hold the phone still.');
       return null;
     }
-    return BookScanner().scanBooks(
-      ocr.words,
-      gapThreshold: _fallbackGapThreshold,
-      statusSource: const MockLibraryStatusSource(),
-    );
+    return BookScanner()
+        .scanBooks(ocr.words, gapThreshold: _fallbackGapThreshold);
   }
 
-  Future<OcrResult> _ocrFallback(String imagePath) async {
-    if (kCloudVisionApiKey.isNotEmpty) {
+  /// Cloud Vision is gated by the same consent as Claude — both send the
+  /// photo to a third party.
+  Future<OcrResult> _ocrFallback(String imagePath,
+      {required bool consented}) async {
+    if (kCloudVisionApiKey.isNotEmpty && consented) {
       try {
-        return await CloudVisionOcr(apiKey: kCloudVisionApiKey).recognize(imagePath);
+        return await CloudVisionOcr(apiKey: kCloudVisionApiKey)
+            .recognize(imagePath);
       } catch (e) {
         debugPrint('[CameraScreen] Cloud Vision failed, using on-device: $e');
       }
@@ -363,7 +389,8 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   Future<void> _openSettings() async {
     if (!TapCooldown.allow()) return;
     tapFeedback();
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
     if (mounted) setState(() {});
   }
 
@@ -394,65 +421,66 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
         onScaleStart: (_) => _zoomAtGestureStart = _zoom,
         onScaleUpdate: (d) => _applyZoom(_zoomAtGestureStart * d.scale),
         child: Stack(
-        children: [
-          if (controller != null && controller.value.isInitialized)
-            _CameraFramePreview(controller: controller)
-          else
-            const Center(child: CircularProgressIndicator(color: kGold)),
-          CustomPaint(size: size, painter: _GuidePainter(frame: frame)),
-          // Settings: top-right corner, anchored by `top`+`right` alone so it
-          // sits in the corner rather than being laid out next to anything.
-          Positioned(
-            top: _inset(pad.top),
-            right: _inset(pad.right),
-            child: _SettingsButton(onTap: _openSettings),
-          ),
-          // Hint: sits directly above the viewfinder, tracking the frame
-          // itself rather than a screen edge, in both orientations.
-          if (tips)
+          children: [
+            if (controller != null && controller.value.isInitialized)
+              _CameraFramePreview(controller: controller)
+            else
+              const Center(child: CircularProgressIndicator(color: kGold)),
+            CustomPaint(size: size, painter: _GuidePainter(frame: frame)),
+            // Settings: top-right corner, anchored by `top`+`right` alone so it
+            // sits in the corner rather than being laid out next to anything.
             Positioned(
-              left: 24,
-              right: 24,
-              bottom: size.height - frame.top + 10,
-              child: Center(child: _TipPill(mode: _mode)),
-            ),
-          // Shutter: bottom-centre, in both orientations.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: _inset(pad.bottom),
-            child: Center(child: _shutter()),
-          ),
-          // Mode toggle: directly above the capture button in portrait,
-          // bottom-right corner in landscape.
-          if (landscape)
-            Positioned(
+              top: _inset(pad.top),
               right: _inset(pad.right),
-              bottom: _inset(pad.bottom),
-              child: _ModeToggle(current: _mode, onSwitch: _switchMode),
-            )
-          else
+              child: _SettingsButton(onTap: _openSettings),
+            ),
+            // Hint: sits directly above the viewfinder, tracking the frame
+            // itself rather than a screen edge, in both orientations.
+            if (tips)
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: size.height - frame.top + 10,
+                child: Center(child: _TipPill(mode: _mode)),
+              ),
+            // Shutter: bottom-centre, in both orientations.
             Positioned(
               left: 0,
               right: 0,
-              bottom: _inset(pad.bottom) + _shutterSize + _controlGap,
-              child: Center(child: _ModeToggle(current: _mode, onSwitch: _switchMode)),
-            ),
-          // Zoom: bottom-left, the one corner free in both orientations.
-          if (_canZoom)
-            Positioned(
-              left: _inset(pad.left),
               bottom: _inset(pad.bottom),
-              child: _ZoomControl(
-                zoom: _zoom,
-                presets: _availablePresets,
-                onSelect: (z) {
-                  tapFeedback();
-                  _applyZoom(z);
-                },
-              ),
+              child: Center(child: _shutter()),
             ),
-        ],
+            // Mode toggle: directly above the capture button in portrait,
+            // bottom-right corner in landscape.
+            if (landscape)
+              Positioned(
+                right: _inset(pad.right),
+                bottom: _inset(pad.bottom),
+                child: _ModeToggle(current: _mode, onSwitch: _switchMode),
+              )
+            else
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: _inset(pad.bottom) + _shutterSize + _controlGap,
+                child: Center(
+                    child: _ModeToggle(current: _mode, onSwitch: _switchMode)),
+              ),
+            // Zoom: bottom-left, the one corner free in both orientations.
+            if (_canZoom)
+              Positioned(
+                left: _inset(pad.left),
+                bottom: _inset(pad.bottom),
+                child: _ZoomControl(
+                  zoom: _zoom,
+                  presets: _availablePresets,
+                  onSelect: (z) {
+                    tapFeedback();
+                    _applyZoom(z);
+                  },
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -460,7 +488,9 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
   Widget _shutter() => _ShutterButton(
         busy: _isCapturing,
-        label: _mode == _ScanMode.shelf ? 'Take a photo of the shelf' : 'Scan the barcode',
+        label: _mode == _ScanMode.shelf
+            ? 'Take a photo of the shelf'
+            : 'Scan the barcode',
         onTap: _onShutter,
       );
 
@@ -473,6 +503,7 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
   /// safe area when that's larger (home indicator, notch), otherwise this.
   /// One rule instead of a different hand-picked number per control.
   static const _edgeInset = 12.0;
+
   /// Gap between two stacked controls.
   static const _controlGap = 12.0;
 
@@ -522,7 +553,6 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
     return Rect.fromCenter(center: center, width: w, height: w / aspect);
   }
 }
-
 
 /// The preview's aspect ratio as drawn on screen. The camera reports it in
 /// landscape terms, so it flips when the phone is upright.
@@ -615,7 +645,8 @@ class _ZoomControl extends StatelessWidget {
   final double zoom;
   final List<double> presets;
   final ValueChanged<double> onSelect;
-  const _ZoomControl({required this.zoom, required this.presets, required this.onSelect});
+  const _ZoomControl(
+      {required this.zoom, required this.presets, required this.onSelect});
 
   /// The step the current zoom belongs to: the largest preset at or below it.
   double get _active =>
@@ -623,35 +654,33 @@ class _ZoomControl extends StatelessWidget {
 
   static String _label(double v) {
     final oneDecimal = v.toStringAsFixed(1);
-    return oneDecimal.endsWith('.0') ? '${v.toStringAsFixed(0)}x' : '${oneDecimal}x';
+    return oneDecimal.endsWith('.0')
+        ? '${v.toStringAsFixed(0)}x'
+        : '${oneDecimal}x';
   }
 
   @override
   Widget build(BuildContext context) {
     final active = _active;
-    // Fixed size: this is a dense numeric control, so it reads the phone's
-    // text-size setting out rather than overflowing at the largest steps.
-    return MediaQuery.withNoTextScaling(
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: _overlayBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0x40FFFFFF)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final preset in presets) ...[
-              if (preset != presets.first) const SizedBox(width: 2),
-              _ZoomStep(
-                label: preset == active ? _label(zoom) : _label(preset),
-                active: preset == active,
-                onTap: () => onSelect(preset),
-              ),
-            ],
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: _overlayBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0x40FFFFFF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final preset in presets) ...[
+            if (preset != presets.first) const SizedBox(width: 2),
+            _ZoomStep(
+              label: preset == active ? _label(zoom) : _label(preset),
+              active: preset == active,
+              onTap: () => onSelect(preset),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -661,7 +690,8 @@ class _ZoomStep extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _ZoomStep({required this.label, required this.active, required this.onTap});
+  const _ZoomStep(
+      {required this.label, required this.active, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -677,13 +707,17 @@ class _ZoomStep extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 40, minWidth: 42),
+            constraints:
+                const BoxConstraints(minHeight: kMinTap, minWidth: kMinTap),
             child: Center(
-              child: Text(
-                label,
-                style: kLabel(14,
-                    color: active ? const Color(0xFF1A1917) : kOnDark,
-                    weight: FontWeight.w600),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  label,
+                  style: kLabel(14,
+                      color: active ? kOnGold : kOnDark,
+                      weight: FontWeight.w600),
+                ),
               ),
             ),
           ),
@@ -722,7 +756,8 @@ class _ShutterButton extends StatelessWidget {
   final bool busy;
   final String label;
   final VoidCallback onTap;
-  const _ShutterButton({required this.busy, required this.label, required this.onTap});
+  const _ShutterButton(
+      {required this.busy, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -744,7 +779,8 @@ class _ShutterButton extends StatelessWidget {
           child: busy
               ? const Padding(
                   padding: EdgeInsets.all(18),
-                  child: CircularProgressIndicator(strokeWidth: 3, color: kGoldText),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 3, color: kGoldText),
                 )
               : null,
         ),
@@ -791,11 +827,12 @@ class _ModeOption extends StatelessWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _ModeOption({required this.label, required this.active, required this.onTap});
+  const _ModeOption(
+      {required this.label, required this.active, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final fg = active ? const Color(0xFF1A1917) : kOnDark;
+    final fg = active ? kOnGold : kOnDark;
     return Semantics(
       button: true,
       selected: active,
@@ -831,9 +868,9 @@ class _LoadingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Scaffold(
-    backgroundColor: kBgDark,
-    body: Center(child: CircularProgressIndicator(color: kGold)),
-  );
+        backgroundColor: kBgDark,
+        body: Center(child: CircularProgressIndicator(color: kGold)),
+      );
 }
 
 class _DarkMessage extends StatelessWidget {
@@ -841,7 +878,11 @@ class _DarkMessage extends StatelessWidget {
   final String title;
   final String message;
   final Widget? action;
-  const _DarkMessage({required this.icon, required this.title, required this.message, this.action});
+  const _DarkMessage(
+      {required this.icon,
+      required this.title,
+      required this.message,
+      this.action});
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -864,7 +905,10 @@ class _DarkMessage extends StatelessWidget {
                     Text(message,
                         textAlign: TextAlign.center,
                         style: kBody(17, color: kOnDarkMut)),
-                    if (action != null) ...[const SizedBox(height: 28), action!],
+                    if (action != null) ...[
+                      const SizedBox(height: 28),
+                      action!
+                    ],
                   ],
                 ),
               ),
@@ -884,7 +928,8 @@ class _CameraErrorView extends StatelessWidget {
     return const _DarkMessage(
       icon: Icons.no_photography_rounded,
       title: 'The camera is not working',
-      message: 'Close ShelfScan and open it again. If that does not help, restart your phone.',
+      message:
+          'Close Shelver Helper and open it again. If that does not help, restart your phone.',
     );
   }
 }
@@ -895,8 +940,9 @@ class _PermissionDeniedView extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const _DarkMessage(
         icon: Icons.photo_camera_rounded,
-        title: 'ShelfScan needs your camera',
-        message: 'The camera reads the book spines. Turn on Camera for ShelfScan in Settings.',
+        title: 'Shelver Helper needs your camera',
+        message:
+            'The camera reads the book spines. Turn on Camera for Shelver Helper in Settings.',
         action: AppButton(
           label: 'Open Settings',
           icon: Icons.settings_rounded,

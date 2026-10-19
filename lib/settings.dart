@@ -56,8 +56,12 @@ class AppSettings extends ChangeNotifier {
   bool showTips = true;
   bool haptics = true;
   /// Whether shelf photos may be sent to Claude (App Store 5.1.2(i)).
-  /// Null until the user has been asked. Not touched by [reset].
-  bool? aiConsent;
+  /// Defaults on; the one-time disclosure sheet (gated by
+  /// [aiDisclosureShown], not this) is what makes that compliant — it
+  /// still runs before the very first photo ever goes out, and can turn
+  /// this off right there. Neither is touched by [reset].
+  bool aiConsent = true;
+  bool aiDisclosureShown = false;
 
   Future<void> load() async {
     try {
@@ -68,7 +72,8 @@ class AppSettings extends ChangeNotifier {
       useFlash = p.getBool('useFlash') ?? useFlash;
       showTips = p.getBool('showTips') ?? showTips;
       haptics = p.getBool('haptics') ?? haptics;
-      aiConsent = p.getBool('aiConsent');
+      aiConsent = p.getBool('aiConsent') ?? aiConsent;
+      aiDisclosureShown = p.getBool('aiDisclosureShown') ?? aiDisclosureShown;
     } catch (e) {
       debugPrint('[Settings] load failed, using defaults: $e');
     }
@@ -82,6 +87,7 @@ class AppSettings extends ChangeNotifier {
     bool? showTips,
     bool? haptics,
     bool? aiConsent,
+    bool? aiDisclosureShown,
   }) {
     this.textSize = textSize ?? this.textSize;
     this.font = font ?? this.font;
@@ -90,6 +96,7 @@ class AppSettings extends ChangeNotifier {
     this.showTips = showTips ?? this.showTips;
     this.haptics = haptics ?? this.haptics;
     this.aiConsent = aiConsent ?? this.aiConsent;
+    this.aiDisclosureShown = aiDisclosureShown ?? this.aiDisclosureShown;
     _save();
     notifyListeners();
   }
@@ -114,7 +121,8 @@ class AppSettings extends ChangeNotifier {
     p.setBool('useFlash', useFlash);
     p.setBool('showTips', showTips);
     p.setBool('haptics', haptics);
-    if (aiConsent != null) p.setBool('aiConsent', aiConsent!);
+    p.setBool('aiConsent', aiConsent);
+    p.setBool('aiDisclosureShown', aiDisclosureShown);
   }
 }
 

@@ -48,16 +48,23 @@ class NoBooksFoundException implements Exception {
 }
 
 class ClaudeOcr {
-  final String apiKey;
+  final String proxyUrl;
+  final String appSecret;
   final String model;
 
-  const ClaudeOcr({required this.apiKey, this.model = 'claude-sonnet-4-6'});
+  const ClaudeOcr({
+    required this.proxyUrl,
+    required this.appSecret,
+    this.model = 'claude-sonnet-4-6',
+  });
 
   /// [jpeg] should already be cropped and sized by [prepareScanImage].
+  /// Goes through cloud/claude-proxy, which holds the real Anthropic key
+  /// server-side — the app never sees it.
   Future<ScanResult> scan(Uint8List jpeg) async {
     final b64 = base64Encode(jpeg);
 
-    final uri = Uri.parse('https://api.anthropic.com/v1/messages');
+    final uri = Uri.parse(proxyUrl);
     final payload = jsonEncode({
       'model': model,
       'max_tokens': 2048,
@@ -81,8 +88,7 @@ class ClaudeOcr {
         uri,
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
+          'X-App-Secret': appSecret,
         },
         body: payload,
       ).timeout(const Duration(seconds: 45));

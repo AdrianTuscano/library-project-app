@@ -44,9 +44,8 @@ class SettingsScreen extends StatelessWidget {
                           flash: appSettings.useFlash,
                           tips: appSettings.showTips,
                           vibrations: appSettings.haptics,
-                          // Only offered when Claude is configured (never in
-                          // release builds until the proxy exists).
-                          claudeAi: kAnthropicApiKey.isEmpty ? null : appSettings.aiConsent == true,
+                          // Only offered once the proxy is configured.
+                          cloudModel: kClaudeProxyUrl.isEmpty ? null : appSettings.aiConsent,
                         ),
                         const SizedBox(height: 32),
                         const _ResetButton(),
@@ -286,12 +285,12 @@ class _Toggles extends StatelessWidget {
   final bool flash;
   final bool tips;
   final bool vibrations;
-  final bool? claudeAi;
+  final bool? cloudModel;
   const _Toggles({
     required this.flash,
     required this.tips,
     required this.vibrations,
-    required this.claudeAi,
+    required this.cloudModel,
   });
 
   @override
@@ -316,11 +315,11 @@ class _Toggles extends StatelessWidget {
             value: vibrations,
             onChanged: (v) => appSettings.update(haptics: v),
           ),
-          if (claudeAi != null) ...[
+          if (cloudModel != null) ...[
             const Divider(color: kDivider, height: 1),
             _ToggleRow(
-              title: 'Claude AI',
-              value: claudeAi!,
+              title: 'Cloud Model',
+              value: cloudModel!,
               onChanged: (v) => appSettings.update(aiConsent: v),
             ),
           ],

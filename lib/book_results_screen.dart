@@ -6,6 +6,7 @@ import 'library_status_service.dart';
 import 'settings.dart';
 import 'shelf_sort_view.dart';
 import 'widgets.dart';
+import 'z3950_catalog_service.dart';
 
 String lastName(String author) {
   final parts = author.trim().split(RegExp(r'\s+'));
@@ -46,17 +47,17 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
     super.dispose();
   }
 
-  static const _placeholders = [
-    (w: 30.0, h: 152.0, c: Color(0xFF5C5348)),
-    (w: 26.0, h: 170.0, c: Color(0xFF7D5411)),
-    (w: 34.0, h: 160.0, c: Color(0xFF3F4A52)),
-    (w: 28.0, h: 146.0, c: Color(0xFF8C3A2B)),
-    (w: 40.0, h: 176.0, c: Color(0xFF2D2B2B)),
-    (w: 32.0, h: 164.0, c: Color(0xFF6B6350)),
-    (w: 29.0, h: 154.0, c: Color(0xFF9B7232)),
-    (w: 27.0, h: 168.0, c: Color(0xFF4A4740)),
-    (w: 31.0, h: 150.0, c: Color(0xFF7A6A55)),
-    (w: 36.0, h: 172.0, c: Color(0xFF605D5D)),
+  static final _placeholders = [
+    (w: 30.0, h: 152.0, c: kSpines[0]),
+    (w: 26.0, h: 170.0, c: kSpines[1]),
+    (w: 34.0, h: 160.0, c: kSpines[2]),
+    (w: 28.0, h: 146.0, c: kSpines[3]),
+    (w: 40.0, h: 176.0, c: kSpines[4]),
+    (w: 32.0, h: 164.0, c: kSpines[5]),
+    (w: 29.0, h: 154.0, c: kSpines[6]),
+    (w: 27.0, h: 168.0, c: kSpines[7]),
+    (w: 31.0, h: 150.0, c: kSpines[8]),
+    (w: 36.0, h: 172.0, c: kSpines[9]),
   ];
 
   @override
@@ -89,14 +90,36 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
   }
 
   void _checkAllStatuses(List<BookResult> books) {
+    void onResult(int position, LibraryStatus status) {
+      if (!mounted) return;
+      setState(() => _statuses[position] = status);
+      _statusUpdates.value++;
+    }
+
+    final service = libraryStatus;
+    if (service is Z3950LibraryStatusService) {
+      // One connection for the whole shelf instead of one per book.
+      service.checkBatch(
+        [
+          for (final b in books)
+            (
+              position: b.position,
+              title: b.title,
+              author: b.author,
+              callNumber: b.callNumber
+            )
+        ],
+        onResult,
+      );
+      return;
+    }
+    // Fallback for any other LibraryStatusService (e.g. a test fake) that
+    // doesn't offer batching.
     for (final book in books) {
-      libraryStatus
+      service
           .checkByTitle(book.title, book.author, callNumber: book.callNumber)
-          .then((status) {
-        if (!mounted) return;
-        setState(() => _statuses[book.position] = status);
-        _statusUpdates.value++;
-      }).catchError((_) {});
+          .then((status) => onResult(book.position, status))
+          .catchError((_) {});
     }
   }
 
@@ -107,7 +130,9 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
     final ctx = _spineKeys[next]?.currentContext;
     if (ctx != null) {
       Scrollable.ensureVisible(ctx,
-          alignment: 0.5, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut);
     }
   }
 
@@ -255,7 +280,9 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
           children: [
             AppTopBar(
               title: 'Your shelf',
-              subtitle: books.length == 1 ? '1 book found' : '${books.length} books found',
+              subtitle: books.length == 1
+                  ? '1 book found'
+                  : '${books.length} books found',
               onBack: () => Navigator.pop(context),
               backLabel: 'New scan',
             ),
@@ -268,7 +295,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
                           child: LayoutBuilder(
                             builder: (context, c) => SingleChildScrollView(
                               child: _buildSpineArea(books,
-                                  spinesHeight: (c.maxHeight - 120).clamp(160.0, 230.0)),
+                                  spinesHeight:
+                                      (c.maxHeight - 120).clamp(160.0, 230.0)),
                             ),
                           ),
                         ),
@@ -278,7 +306,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
                             color: kBgPanel,
                             border: Border(left: BorderSide(color: kDivider)),
                           ),
-                          child: SingleChildScrollView(child: _buildDetailPanel(books, sel)),
+                          child: SingleChildScrollView(
+                              child: _buildDetailPanel(books, sel)),
                         ),
                       ],
                     )
@@ -305,7 +334,8 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
     );
   }
 
-  Widget _buildSpineArea(List<BookResult> books, {required double spinesHeight}) {
+  Widget _buildSpineArea(List<BookResult> books,
+      {required double spinesHeight}) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -353,7 +383,7 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
             );
           }),
         ),
-        Container(height: 8, color: const Color(0xFFCFC9C2)),
+        Container(height: 8, color: kShelfLine),
       ],
     );
   }
@@ -374,13 +404,15 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
                   label: 'Previous',
                   icon: Icons.chevron_left_rounded,
                   kind: AppButtonKind.secondary,
-                  onPressed: index > 0 ? () => _select(index - 1, books.length) : null,
+                  onPressed:
+                      index > 0 ? () => _select(index - 1, books.length) : null,
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: Text('${index + 1} of ${books.length}',
-                    style: kLabel(16, color: kTextMut, weight: FontWeight.w600)),
+                    style:
+                        kLabel(16, color: kTextMut, weight: FontWeight.w600)),
               ),
               Expanded(
                 child: AppButton(
@@ -415,12 +447,17 @@ class _BookResultsScreenState extends State<BookResultsScreen> {
             runSpacing: 14,
             children: [
               if (b.callNumber != null)
-                InfoField(label: 'Call number', value: b.callNumber!, callNumber: true),
+                InfoField(
+                    label: 'Call number',
+                    value: b.callNumber!,
+                    callNumber: true),
               if (b.firstPublishYear != null)
                 InfoField(label: 'First published', value: b.firstPublishYear!),
               InfoField(
                 label: 'Title match',
-                value: b.confidence == 'high' ? 'Very sure' : 'Not sure, please check',
+                value: b.confidence == 'high'
+                    ? 'Very sure'
+                    : 'Not sure, please check',
               ),
             ],
           ),
@@ -473,44 +510,60 @@ class _SpineBar extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: AnimatedSlide(
-            duration: const Duration(milliseconds: 180),
-            offset: Offset(0, selected ? -0.06 : 0),
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.topCenter,
-              children: [
-                Container(
-                  width: w,
-                  height: h,
-                  decoration: BoxDecoration(
-                    color: spineColor(book.position),
-                    border: selected ? Border.all(color: kGold, width: 3.5) : null,
-                    boxShadow: selected
-                        ? const [BoxShadow(color: Color(0x55000000), blurRadius: 8, offset: Offset(0, 3))]
-                        : null,
-                  ),
-                  padding: const EdgeInsets.only(top: 30, bottom: 8),
-                  child: Center(
-                    child: RotatedBox(
-                      quarterTurns: 3,
-                      // Decorative label; the full title is in the panel, so it
-                      // doesn't grow with text size and overflow the spine.
-                      child: MediaQuery.withNoTextScaling(
-                        child: Text(
-                          '${book.position}  ${book.title}',
-                          style: kLabel(13, color: const Color(0xFFF7F2EA), weight: FontWeight.w600),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+        // The painted spine can be narrower than a safe tap target (titles
+        // hash to 32-51pt wide); the hit box stays at least kMinTap even
+        // when the visible bar is narrower.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: kMinTap),
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Center(
+              child: AnimatedSlide(
+                duration: const Duration(milliseconds: 180),
+                offset: Offset(0, selected ? -0.06 : 0),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.topCenter,
+                  children: [
+                    Container(
+                      width: w,
+                      height: h,
+                      decoration: BoxDecoration(
+                        color: spineColor(book.position),
+                        border: selected
+                            ? Border.all(color: kGold, width: 3.5)
+                            : null,
+                        boxShadow: selected
+                            ? const [
+                                BoxShadow(
+                                    color: Color(0x55000000),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 3))
+                              ]
+                            : null,
+                      ),
+                      padding: const EdgeInsets.only(top: 30, bottom: 8),
+                      child: Center(
+                        child: RotatedBox(
+                          quarterTurns: 3,
+                          // Decorative label; the full title is in the panel, so it
+                          // doesn't grow with text size and overflow the spine.
+                          child: MediaQuery.withNoTextScaling(
+                            child: Text(
+                              '${book.position}  ${book.title}',
+                              style: kLabel(13,
+                                  color: kSpineLabel, weight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    Positioned(top: 4, child: StatusDot(status: status)),
+                  ],
                 ),
-                Positioned(top: 4, child: StatusDot(status: status)),
-              ],
+              ),
             ),
           ),
         ),

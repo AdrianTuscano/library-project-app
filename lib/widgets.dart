@@ -28,12 +28,18 @@ class AppButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final primary = kind == AppButtonKind.primary;
-    final (bg, fg, border) = switch ((primary, onDark)) {
+    var (bg, fg, border) = switch ((primary, onDark)) {
       (true, false) => (kGoldText, Colors.white, kGoldText),
-      (true, true) => (kGold, const Color(0xFF1A1917), kGold),
+      (true, true) => (kGold, kOnGold, kGold),
       (false, false) => (Colors.transparent, kGoldText, kGoldText),
       (false, true) => (Colors.transparent, kGoldLight, kGold),
     };
+    final disabled = onPressed == null;
+    if (disabled) {
+      bg = bg.withValues(alpha: bg.a * 0.4);
+      fg = fg.withValues(alpha: 0.4);
+      border = border.withValues(alpha: 0.4);
+    }
 
     final content = Row(
       mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
@@ -51,6 +57,7 @@ class AppButton extends StatelessWidget {
 
     return Semantics(
       button: true,
+      enabled: !disabled,
       label: label,
       excludeSemantics: true,
       child: Material(
@@ -408,15 +415,14 @@ Future<bool?> showAiConsentSheet(BuildContext context) {
                 Text('Use AI to read the book spines?', style: kHeading(26)),
                 const SizedBox(height: 12),
                 Text(
-                  'ShelfScan sends the shelf photo to Claude, an AI made by Anthropic, '
-                  'to read each book\'s title and author. Only the part inside the box is sent. '
-                  'ShelfScan does not keep the photo.',
+                  'The boxed part of the photo may be sent to Anthropic or Google '
+                  'to read the titles. It\'s not kept.',
                   style: kBody(17),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'If you say no, your phone reads the spines by itself. '
-                  'This can be less accurate. You can change this in Settings.',
+                  'Say no and your phone reads it instead — less accurate, '
+                  'nothing leaves it. Change this anytime in Settings.',
                   style: kBody(16, color: kTextMut),
                 ),
                 const SizedBox(height: 22),

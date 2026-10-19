@@ -30,6 +30,10 @@ const List<Color> kSpines = [
   Color(0xFF7A6A55), Color(0xFF605D5D),
 ];
 
+const kShelfLine  = Color(0xFFCFC9C2);
+const kSpineLabel = Color(0xFFF7F2EA);
+const kOnGold     = Color(0xFF1A1917); // dark text on a solid gold control
+
 Color spineColor(int position) => kSpines[(position - 1) % kSpines.length];
 
 TextStyle kHeading(double size, {Color color = kText}) => GoogleFonts.getFont(

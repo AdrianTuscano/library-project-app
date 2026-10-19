@@ -2,18 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'book_cache.dart';
 
 enum ResultSource {
   network,
-  cache,
   unavailable,
-}
-
-enum LibraryAvailability {
-  available,
-  checkedOut,
-  unknown,
 }
 
 class BookResult {
@@ -24,7 +16,6 @@ class BookResult {
   final String confidence;
   final int position;
   final ResultSource source;
-  final LibraryAvailability availability;
 
   const BookResult({
     required this.title,
@@ -34,23 +25,10 @@ class BookResult {
     required this.confidence,
     required this.position,
     this.source = ResultSource.network,
-    this.availability = LibraryAvailability.unknown,
   });
 
-  BookResult copyWith({LibraryAvailability? availability}) => BookResult(
-        title: title,
-        author: author,
-        firstPublishYear: firstPublishYear,
-        callNumber: callNumber,
-        confidence: confidence,
-        position: position,
-        source: source,
-        availability: availability ?? this.availability,
-      );
-
   @override
-  String toString() =>
-      'Book #$position [$source] {$availability}: "$title" by $author'
+  String toString() => 'Book #$position [$source]: "$title" by $author'
       '${firstPublishYear != null ? " ($firstPublishYear)" : ""}';
 }
 
@@ -63,13 +41,55 @@ class ScanWord {
 
 class BookScanner {
   static const _noiseWords = {
-    'press', 'books', 'publishing', 'publishers', 'inc', 'ltd', 'co', 'e', 'llc',
-    'scholastic', 'penguin', 'puffin', 'random', 'house', 'harper', 'collins',
-    'harpercollins', 'simon', 'schuster', 'macmillan', 'hachette', 'bloomsbury',
-    'usborne', 'egmont', 'faber', 'walker', 'hodder', 'oxford', 'cambridge',
-    'orchard', 'corgi', 'yearling', 'ember', 'delacorte', 'knopf', 'crown',
-    'roaring', 'brook', 'square', 'fish', 'little', 'brown', 'hyperion',
-    'disney', 'aladdin', 'atheneum', 'greenwillow', 'holt', 'putnam',
+    'press',
+    'books',
+    'publishing',
+    'publishers',
+    'inc',
+    'ltd',
+    'co',
+    'e',
+    'llc',
+    'scholastic',
+    'penguin',
+    'puffin',
+    'random',
+    'house',
+    'harper',
+    'collins',
+    'harpercollins',
+    'simon',
+    'schuster',
+    'macmillan',
+    'hachette',
+    'bloomsbury',
+    'usborne',
+    'egmont',
+    'faber',
+    'walker',
+    'hodder',
+    'oxford',
+    'cambridge',
+    'orchard',
+    'corgi',
+    'yearling',
+    'ember',
+    'delacorte',
+    'knopf',
+    'crown',
+    'roaring',
+    'brook',
+    'square',
+    'fish',
+    'little',
+    'brown',
+    'hyperion',
+    'disney',
+    'aladdin',
+    'atheneum',
+    'greenwillow',
+    'holt',
+    'putnam',
   };
 
   List<List<ScanWord>> clusterByGap(
@@ -115,7 +135,6 @@ class BookScanner {
     List<String> texts, {
     String? callNumber,
     int position = 0,
-    BookCache? cache,
   }) async {
     final filtered = filterNoise(texts);
     if (filtered.isEmpty) return null;
@@ -123,25 +142,18 @@ class BookScanner {
     final query = _normalizeQuery(filtered);
     if (query.isEmpty) return null;
 
-    if (cache != null) {
-      final hit = await cache.lookup(filtered, position);
-      if (hit != null) return hit;
-    }
-
     debugPrint('[ShelfScan] query: "$query"');
 
     BookResult? result;
     try {
-      result = await _googleBooks(query, callNumber: callNumber, position: position);
-      result ??= await _openLibrary(query, callNumber: callNumber, position: position);
+      result =
+          await _googleBooks(query, callNumber: callNumber, position: position);
+      result ??=
+          await _openLibrary(query, callNumber: callNumber, position: position);
     } on _OfflineException {
       rethrow;
     } catch (e) {
       debugPrint('[ShelfScan] search error: $e');
-    }
-
-    if (result != null && cache != null) {
-      await cache.store(filtered, result);
     }
     return result;
   }
@@ -214,7 +226,8 @@ class BookScanner {
     final numFound = (data?['numFound'] as num?)?.toInt() ?? 0;
     return BookResult(
       title: best['title'] as String? ?? 'Unknown',
-      author: (best['author_name'] as List?)?.firstOrNull as String? ?? 'Unknown',
+      author:
+          (best['author_name'] as List?)?.firstOrNull as String? ?? 'Unknown',
       firstPublishYear: best['first_publish_year']?.toString(),
       callNumber: callNumber,
       confidence: numFound < 10 ? 'high' : 'medium',
@@ -245,11 +258,8 @@ class BookScanner {
     return hits / queryTokens.length;
   }
 
-  Set<String> _tokenSet(String s) => s
-      .toLowerCase()
-      .split(RegExp(r'\s+'))
-      .where((t) => t.length > 1)
-      .toSet();
+  Set<String> _tokenSet(String s) =>
+      s.toLowerCase().split(RegExp(r'\s+')).where((t) => t.length > 1).toSet();
 
   String? _extractYear(String? s) {
     if (s == null) return null;
@@ -259,15 +269,14 @@ class BookScanner {
   Future<ScanResult> scanBooks(
     List<ScanWord> words, {
     double gapThreshold = 100,
-    BookCache? cache,
-    LibraryStatusSource? statusSource,
   }) async {
     final clusters = clusterByGap(words, gapThreshold: gapThreshold);
     debugPrint('[ShelfScan] clusters: ${clusters.length}');
     if (clusters.isEmpty) return const ScanResult(books: [], isOffline: false);
 
     for (var i = 0; i < clusters.length; i++) {
-      debugPrint('[ShelfScan] cluster ${i + 1}: ${clusters[i].map((w) => w.text).toList()}');
+      debugPrint(
+          '[ShelfScan] cluster ${i + 1}: ${clusters[i].map((w) => w.text).toList()}');
     }
 
     bool offline = false;
@@ -279,12 +288,8 @@ class BookScanner {
       final callNumber = extractCallNumber(texts);
 
       try {
-        return await smartBookSearch(
-          texts,
-          callNumber: callNumber,
-          position: idx + 1,
-          cache: cache,
-        );
+        return await smartBookSearch(texts,
+            callNumber: callNumber, position: idx + 1);
       } on _OfflineException catch (e) {
         debugPrint('[ShelfScan] offline: $e');
         offline = true;
@@ -305,23 +310,13 @@ class BookScanner {
 
     final results = await Future.wait(futures);
 
-    var books = results.whereType<BookResult>().toList()
+    final books = results.whereType<BookResult>().toList()
       ..sort((a, b) => a.position.compareTo(b.position));
 
-    if (statusSource != null && books.isNotEmpty) {
-      try {
-        final statuses = await statusSource.statusFor(books);
-        books = [
-          for (final b in books)
-            b.copyWith(availability: statuses[b.position]),
-        ];
-      } catch (e) {
-        debugPrint('[ShelfScan] status lookup failed: $e');
-      }
-    }
-
     debugPrint('[ShelfScan] found ${books.length}, offline=$offline');
-    for (final b in books) { debugPrint('[ShelfScan] $b'); }
+    for (final b in books) {
+      debugPrint('[ShelfScan] $b');
+    }
 
     return ScanResult(books: books, isOffline: offline);
   }
@@ -339,22 +334,4 @@ class _OfflineException implements Exception {
   const _OfflineException(this.message);
   @override
   String toString() => 'OfflineException: $message';
-}
-
-abstract class LibraryStatusSource {
-  Future<Map<int, LibraryAvailability>> statusFor(List<BookResult> books);
-}
-
-class MockLibraryStatusSource implements LibraryStatusSource {
-  const MockLibraryStatusSource();
-
-  @override
-  Future<Map<int, LibraryAvailability>> statusFor(List<BookResult> books) async {
-    return {
-      for (final b in books)
-        b.position: b.position % 3 == 0
-            ? LibraryAvailability.checkedOut
-            : LibraryAvailability.available,
-    };
-  }
 }

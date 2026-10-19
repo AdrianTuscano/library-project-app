@@ -18,4 +18,5 @@ abstract class LibraryStatusService {
   Future<LibraryStatus> checkByTitle(String title, String author, {String? callNumber});
 }
 
-final libraryStatus = Z3950LibraryStatusService();
+// Not `final`, so a test can substitute a fake.
+LibraryStatusService libraryStatus = Z3950LibraryStatusService();

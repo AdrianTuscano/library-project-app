@@ -2,7 +2,7 @@
 //
 // Only imports pure-Dart files (z3950_client.dart, marc21.dart) — not
 // z3950_catalog_service.dart, which pulls in package:flutter and can't run
-// outside a Flutter host. Mirrors probe_apollo.dart's approach.
+// outside a Flutter host.
 // ignore_for_file: avoid_print
 
 import 'dart:io';

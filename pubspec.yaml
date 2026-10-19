@@ -1,7 +1,7 @@
 name: shelf_scan
 description: Scan book spines with on-device OCR.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -21,10 +21,6 @@ dependencies:
 
   # HTTP for Open Library API lookups
   http: ^1.2.0
-
-  # Local SQLite cache for book results
-  sqflite: ^2.3.0
-  path: ^1.9.0
 
   # Runtime permission requests (camera denial → Settings prompt)
   permission_handler: ^11.3.0

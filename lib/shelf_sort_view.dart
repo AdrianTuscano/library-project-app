@@ -280,7 +280,7 @@ class _ShelfDrawing extends StatelessWidget {
               top: arcZoneH + badgeH + maxSpineH,
               left: 0,
               width: math.max(totalW, constraints.maxWidth),
-              child: Container(height: shelfLineH, color: const Color(0xFFCFC9C2)),
+              child: Container(height: shelfLineH, color: kShelfLine),
             ),
           ],
         ),
@@ -478,7 +478,7 @@ class _SortSpine extends StatelessWidget {
           child: MediaQuery.withNoTextScaling(
             child: Text(
               '${item.currentSlot}  ${item.book.title}',
-              style: kLabel(13, color: const Color(0xFFF7F2EA), weight: FontWeight.w600),
+              style: kLabel(13, color: kSpineLabel, weight: FontWeight.w600),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),

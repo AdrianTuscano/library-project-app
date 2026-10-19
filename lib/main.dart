@@ -1,15 +1,11 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
-import 'book_cache.dart';
 import 'camera_screen.dart';
 import 'design.dart';
-import 'nav.dart';
 import 'settings.dart';
 
 List<CameraDescription> cameras = [];
-final bookCache = BookCache();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,8 +20,6 @@ Future<void> main() async {
     cameras = [];
   }
   await appSettings.load();
-  await bookCache.init();
-  if (kDebugMode) await bookCache.clear();
   runApp(const ShelfScanApp());
 }
 
@@ -54,7 +48,7 @@ class _ShelfScanAppState extends State<ShelfScanApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ShelfScan',
+      title: 'Shelver Helper',
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: kBgScreen,
@@ -66,7 +60,8 @@ class _ShelfScanAppState extends State<ShelfScanApp> {
         snackBarTheme: SnackBarThemeData(
           backgroundColor: const Color(0xFF201F1D),
           contentTextStyle: kBody(16, color: kOnDark),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           behavior: SnackBarBehavior.floating,
         ),
       ),
@@ -80,7 +75,6 @@ class _ShelfScanAppState extends State<ShelfScanApp> {
           child: child!,
         );
       },
-      navigatorKey: navigatorKey,
       home: const CameraScreen(),
       debugShowCheckedModeBanner: false,
     );

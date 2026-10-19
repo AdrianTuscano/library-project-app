@@ -1,30 +1,41 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// The previous test here was unmodified `flutter create` boilerplate — it
+// pumped ShelfScanApp and looked for a counter FAB that was never part of
+// this app, so it always failed. This replaces it with a real smoke test:
+// mock the camera-permission channel to "denied" (no camera/platform
+// dependency needed) and confirm the app actually reaches the screen it's
+// supposed to show for that case, instead of crashing or hanging.
 
-import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:shelf_scan/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  const channel = MethodChannel('flutter.baseflow.com/permissions/methods');
+
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'checkPermissionStatus':
+          return 0; // PermissionStatus.denied
+        case 'requestPermissions':
+          return {1: 0}; // {Permission.camera.value: PermissionStatus.denied}
+        default:
+          return null;
+      }
+    });
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
+  });
+
+  testWidgets('shows the camera-permission screen when camera access is denied',
+      (tester) async {
     await tester.pumpWidget(const ShelfScanApp());
+    await tester.pumpAndSettle();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Shelver Helper needs your camera'), findsOneWidget);
   });
 }
