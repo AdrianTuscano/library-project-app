@@ -46,10 +46,6 @@ post_install do |installer|
       # binary size lean. Add PERMISSION_PHOTOS=1 etc. if needed later.
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_CAMERA=1'
-      # MLKit's prebuilt pods ship no Apple Silicon simulator slice; build
-      # x86_64 for the simulator instead (runs fine under Rosetta) so the
-      # project can run on the simulator at all.
-      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
     end
   end
 end

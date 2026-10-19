@@ -1,10 +1,3 @@
-// The previous test here was unmodified `flutter create` boilerplate — it
-// pumped ShelfScanApp and looked for a counter FAB that was never part of
-// this app, so it always failed. This replaces it with a real smoke test:
-// mock the camera-permission channel to "denied" (no camera/platform
-// dependency needed) and confirm the app actually reaches the screen it's
-// supposed to show for that case, instead of crashing or hanging.
-
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shelf_scan/main.dart';

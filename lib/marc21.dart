@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal MARC21 (ISO 2709) record parser — just enough to read the fields
-// ShelfScan needs: 020 (ISBN), 100/700 (author), 245 (title), and 852
+// the app needs: 020 (ISBN), 100/700 (author), 245 (title), and 852
 // (holdings — location, call number, and, from Georgetown's Z39.50 server
 // with element set "C", real-time status in subfield $1: "In" or "Out").
 // ─────────────────────────────────────────────────────────────────────────────

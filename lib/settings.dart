@@ -27,11 +27,10 @@ enum ReadingFont {
   const ReadingFont(this.label, this.bodyFamily, this.headingFamily);
 }
 
-/// A library whose catalog ShelfScan can check — all on Biblionix's Apollo
-/// platform, reachable at z3950.biblionix.com:210/<database>, no credentials.
-/// Confirmed live (see tool/probe_z3950.dart): same protocol, same
-/// real-time-status trick (element set "C"), different database name per
-/// library — adding one here is the whole integration.
+/// A library on Biblionix's Apollo platform, reachable at
+/// z3950.biblionix.com:210/<database> with no credentials. Same protocol for
+/// each, just a different database name — adding one here is the whole
+/// integration.
 enum CatalogLibrary {
   georgetown('georgetown', 'Georgetown Public Library'),
   libertyHill('libertyhill', 'Liberty Hill Public Library'),
